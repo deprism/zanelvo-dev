@@ -61,29 +61,101 @@ def test_get_assets_tool_is_honestly_not_implemented():
         asyncio.run(_run_builtin_tool("get_assets", {"query": "logo"}, task_id="t1", role="design"))
 
 
-def test_web_search_tool_explains_the_gap_when_no_perplexity_key_is_configured(monkeypatch):
+def test_web_search_tool_explains_the_gap_when_no_key_is_configured(monkeypatch):
     # Only reached for non-Anthropic providers — AnthropicProvider intercepts "web_search" before
-    # it would ever become a tool call needing this executor (see anthropic_provider.py). Without a
-    # Perplexity key configured as a fallback, it should explain the actual gap, not silently fail.
+    # it would ever become a tool call needing this executor (see anthropic_provider.py). Without
+    # either a Gemini or a Perplexity key configured, it should explain the actual gap, not fail
+    # silently, and it should mention Gemini's free tier as the recommended fix.
     from app.devstudio.services import settings_service
 
     async def fake_get_secret(name):
-        assert name == "perplexity_api_key"
+        assert name in ("gemini_api_key", "perplexity_api_key")
         return None
 
     monkeypatch.setattr(settings_service, "get_secret", fake_get_secret)
-    with pytest.raises(ToolExecutionError, match="Anthropic"):
+    with pytest.raises(ToolExecutionError, match="Gemini"):
         asyncio.run(_run_builtin_tool("web_search", {"query": "x"}, task_id="t1", role="planner"))
 
 
-def test_web_search_tool_uses_a_configured_perplexity_key_for_non_anthropic_providers(monkeypatch):
-    # This is the fix for "web_search shouldn't require only an Anthropic key" — a configured
-    # Perplexity key makes it work for any provider whose tool-calling loop is supported (Emergent
-    # today), not just Anthropic's own server-hosted search.
+def test_web_search_tool_prefers_gemini_over_perplexity_when_both_are_configured(monkeypatch):
+    # Gemini is free-tier and already an AI-provider key this app tracks; Perplexity is a paid,
+    # search-only credential. When both are configured, Gemini must be tried first.
+    from app.devstudio.services import gemini_search_service, perplexity_service, settings_service
+
+    secrets = {"gemini_api_key": "gm-fake-key", "perplexity_api_key": "pplx-fake-key"}
+
+    async def fake_get_secret(name):
+        return secrets[name]
+
+    async def fake_gemini_research(query, api_key):
+        return f"Gemini result for {query} (key={api_key})"
+
+    async def fake_perplexity_research(query, api_key):  # pragma: no cover - must not be reached
+        raise AssertionError("Perplexity should not be called when a Gemini key is configured")
+
+    monkeypatch.setattr(settings_service, "get_secret", fake_get_secret)
+    monkeypatch.setattr(gemini_search_service, "research", fake_gemini_research)
+    monkeypatch.setattr(perplexity_service, "research", fake_perplexity_research)
+
+    result = asyncio.run(_run_builtin_tool("web_search", {"query": "latest Paper API changes"},
+                                             task_id="t1", role="planner"))
+    assert result == "Gemini result for latest Paper API changes (key=gm-fake-key)"
+
+
+def test_web_search_tool_uses_gemini_alone_with_no_perplexity_key_configured(monkeypatch):
+    # The actual fix for "the only api keys I have to set are either ai related/free": a founder
+    # with just a Gemini key (free tier) gets real web search with zero Perplexity involvement.
+    from app.devstudio.services import gemini_search_service, settings_service
+
+    async def fake_get_secret(name):
+        return "gm-fake-key" if name == "gemini_api_key" else None
+
+    captured = {}
+
+    async def fake_research(query, api_key):
+        captured.update(query=query, api_key=api_key)
+        return "Real, cited Gemini-grounded web research result."
+
+    monkeypatch.setattr(settings_service, "get_secret", fake_get_secret)
+    monkeypatch.setattr(gemini_search_service, "research", fake_research)
+
+    result = asyncio.run(_run_builtin_tool("web_search", {"query": "current Bukkit API version"},
+                                             task_id="t1", role="planner"))
+    assert result == "Real, cited Gemini-grounded web research result."
+    assert captured == {"query": "current Bukkit API version", "api_key": "gm-fake-key"}
+
+
+def test_web_search_tool_falls_back_to_perplexity_when_gemini_key_is_invalid(monkeypatch):
+    # A Gemini key configured but rejected (bad key / not actually set up) must not just error out
+    # when a Perplexity key is also available — fall through rather than fail a working fallback.
+    from app.devstudio.services import gemini_search_service, perplexity_service, settings_service
+
+    secrets = {"gemini_api_key": "gm-bad-key", "perplexity_api_key": "pplx-fake-key"}
+
+    async def fake_get_secret(name):
+        return secrets[name]
+
+    async def fake_gemini_research(query, api_key):
+        raise gemini_search_service.GeminiSearchNotConfigured("Gemini rejected the configured API key")
+
+    async def fake_perplexity_research(query, api_key):
+        return f"Perplexity fallback result for {query}"
+
+    monkeypatch.setattr(settings_service, "get_secret", fake_get_secret)
+    monkeypatch.setattr(gemini_search_service, "research", fake_gemini_research)
+    monkeypatch.setattr(perplexity_service, "research", fake_perplexity_research)
+
+    result = asyncio.run(_run_builtin_tool("web_search", {"query": "x"}, task_id="t1", role="planner"))
+    assert result == "Perplexity fallback result for x"
+
+
+def test_web_search_tool_uses_a_configured_perplexity_key_when_no_gemini_key_is_set(monkeypatch):
+    # Founders who already pay for Perplexity and haven't set a Gemini key still get a working
+    # fallback for any provider whose tool-calling loop is supported (Emergent today).
     from app.devstudio.services import perplexity_service, settings_service
 
     async def fake_get_secret(name):
-        return "pplx-fake-key"
+        return "pplx-fake-key" if name == "perplexity_api_key" else None
 
     captured = {}
 

@@ -187,8 +187,11 @@ BUILTIN_TOOLS: Dict[str, Dict[str, Any]] = {
         "description": "Search the public web for current information. When this role's primary "
                         "model is Anthropic, this routes to Claude's own server-hosted web search "
                         "directly. For any other provider whose tool-calling loop is supported "
-                        "(currently Emergent), it uses a configured Perplexity API key instead — "
-                        "not locked to one specific model provider.",
+                        "(currently Emergent), it uses Gemini's native Google Search grounding if "
+                        "a Gemini API key is configured (free tier, and already one of this app's "
+                        "model-provider keys), otherwise a configured Perplexity API key — never "
+                        "requires an Anthropic key specifically, and never requires a search-only "
+                        "credential when a free/AI-provider key is already set.",
         "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}},
                           "required": ["query"]},
     },
@@ -292,16 +295,26 @@ async def _run_builtin_tool(name: str, arguments: Dict[str, Any], *, task_id: st
         # (mapped to Claude's own server-hosted search tool there, resolved within that one API
         # call — never routed through this executor) when the calling role's model is Anthropic.
         # This executor is only ever reached for a NON-Anthropic provider (Emergent is the only
-        # other one that implements the tool-calling loop today) — for those, fall back to a real
-        # configured Perplexity key rather than hard-requiring Anthropic specifically.
-        from ..services import perplexity_service, settings_service
-        api_key = await settings_service.get_secret("perplexity_api_key")
-        if api_key:
-            return await perplexity_service.research(str(arguments.get("query", "")), api_key)
+        # other one that implements the tool-calling loop today). Backend preference order here is
+        # deliberate: Gemini's native Google Search grounding first (free tier, and already one of
+        # this app's model-provider keys — never a search-only credential), Perplexity only as a
+        # secondary option for founders who already pay for it.
+        from ..services import gemini_search_service, perplexity_service, settings_service
+        query = str(arguments.get("query", ""))
+        gemini_key = await settings_service.get_secret("gemini_api_key")
+        if gemini_key:
+            try:
+                return await gemini_search_service.research(query, gemini_key)
+            except gemini_search_service.GeminiSearchNotConfigured:
+                pass  # fall through to Perplexity below rather than fail outright
+        perplexity_key = await settings_service.get_secret("perplexity_api_key")
+        if perplexity_key:
+            return await perplexity_service.research(query, perplexity_key)
         raise ToolExecutionError(
             "web_search has no search backend available for this role's provider: it isn't "
-            "Anthropic (server-hosted search), and no Perplexity API key is configured as a "
-            "fallback. Add one in Settings > Secrets (Tools group), or configure a real search "
+            "Anthropic (server-hosted search), no Gemini API key is configured (free tier — "
+            "the recommended option, ai.google.dev), and no Perplexity API key is configured "
+            "either. Add one in Settings > Secrets (Tools group), or configure a real search "
             "MCP server instead."
         )
     if name == "screenshot":
