@@ -297,7 +297,7 @@ class FailureRecord(BaseDocument):
 class TestRun(BaseDocument):
     task_id: str
     test_type: Literal["setup", "frontend_unit", "backend_unit", "lint", "typecheck", "build",
-                        "integration", "e2e"]
+                        "integration", "e2e", "java_unit", "agent_tool"]
     command: str
     status: Literal["running", "passed", "failed", "error", "skipped"] = "running"
     duration_ms: Optional[int] = None

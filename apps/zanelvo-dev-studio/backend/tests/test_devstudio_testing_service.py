@@ -106,6 +106,27 @@ def test_java_build_and_test_commands_are_selected_and_pass_command_policy(tmp_p
         assert decision.allowed, f"{c['command']!r} should be allowed: {decision.reason}"
 
 
+def test_every_selected_command_type_is_a_valid_test_run_model_field(tmp_path):
+    # A real bug this caught: select_commands started emitting "java_unit" as a type, but
+    # TestRun.test_type (models.py) is a fixed Literal that didn't include it — every Java test/
+    # build run would have raised a pydantic ValidationError the instant qa_agent tried to record
+    # it, invisible to command_policy-only checks like the test above.
+    from app.devstudio.models import TestRun
+
+    allowed_types = TestRun.model_fields["test_type"].annotation.__args__
+    _write(tmp_path / "backend" / "requirements.txt")
+    _write(tmp_path / "backend" / "ruff.toml")
+    _write(tmp_path / "frontend" / "package.json",
+           json.dumps({"scripts": {"test": "x", "build": "x", "lint": "x"}}))
+    _write(tmp_path / "pom.xml", "<project></project>")
+
+    profile = testing_service.discover(str(tmp_path))
+    commands = testing_service.select_commands(profile, changed_files=[])
+    assert commands, "expected at least one command"
+    for c in commands:
+        assert c["type"] in allowed_types, f"{c['type']!r} is not a valid TestRun.test_type"
+
+
 def test_cwd_is_reported_separately_from_command(tmp_path):
     _write(tmp_path / "apps" / "myapp" / "backend" / "requirements.txt")
 

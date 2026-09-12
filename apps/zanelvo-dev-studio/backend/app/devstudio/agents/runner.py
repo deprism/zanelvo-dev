@@ -212,6 +212,33 @@ BUILTIN_TOOLS: Dict[str, Dict[str, Any]] = {
         "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}},
                           "required": ["query"]},
     },
+    "view_file": {
+        "name": "view_file",
+        "description": "Read a real file from this task's workspace, mid-reasoning — e.g. to "
+                        "check something before deciding what to change, without waiting for the "
+                        "next structured implementation step. Path is relative to the repo root.",
+        "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}},
+                          "required": ["path"]},
+    },
+    "search_files": {
+        "name": "search_files",
+        "description": "Search this task's workspace for a literal/regex text match across real "
+                        "files (like grep), optionally scoped by a glob (e.g. '*.py'). Returns "
+                        "matching file paths with the matching lines.",
+        "inputSchema": {"type": "object", "properties": {
+            "query": {"type": "string"}, "glob": {"type": "string"}}, "required": ["query"]},
+    },
+    "execute_bash": {
+        "name": "execute_bash",
+        "description": "Run a real, allow-listed shell command inside this task's workspace (e.g. "
+                        "npm test, git status, mvn -B package) and see its actual output — the "
+                        "same allowlist/deny-list every other command in this app goes through "
+                        "(services/command_policy.py). A command not on the allowlist, or matching "
+                        "a destructive pattern, is refused with the reason rather than run.",
+        "inputSchema": {"type": "object", "properties": {
+            "command": {"type": "string"}, "cwd_subdir": {"type": "string"}},
+            "required": ["command"]},
+    },
 }
 
 
@@ -254,7 +281,48 @@ async def _run_builtin_tool(name: str, arguments: Dict[str, Any], *, task_id: st
             "get_assets has no real asset provider configured in this build — not implemented "
             "rather than faked. Wire a real image/stock-asset API here if you need this."
         )
+    if name == "view_file":
+        from ..services.file_service import FileService, PathEscapeError
+        path = str(arguments.get("path", "")).strip()
+        if not path:
+            raise ToolExecutionError("view_file requires a 'path'")
+        workspace_path = await _workspace_path_for_task(task_id)
+        try:
+            return FileService(workspace_path).read_file(path)
+        except FileNotFoundError as e:
+            raise ToolExecutionError(f"File not found: {e}") from e
+        except PathEscapeError as e:
+            raise ToolExecutionError(str(e)) from e
+    if name == "search_files":
+        from ..services.file_service import FileService
+        query = str(arguments.get("query", "")).strip()
+        if not query:
+            raise ToolExecutionError("search_files requires a 'query'")
+        workspace_path = await _workspace_path_for_task(task_id)
+        results = FileService(workspace_path).search_repo(query, glob=arguments.get("glob"))
+        return json.dumps(results) if results else "No matches found."
+    if name == "execute_bash":
+        from ..services import execution_service
+        command = str(arguments.get("command", "")).strip()
+        if not command:
+            raise ToolExecutionError("execute_bash requires a 'command'")
+        workspace_path = await _workspace_path_for_task(task_id)
+        try:
+            run = await execution_service.run_command(
+                workspace_path, task_id, command, "agent_tool",
+                cwd_subdir=arguments.get("cwd_subdir"))
+        except execution_service.CommandBlocked as e:
+            raise ToolExecutionError(str(e)) from e
+        return f"exit_code={run.exit_code}\nstdout:\n{run.stdout_tail}\nstderr:\n{run.stderr_tail}"
     raise ToolExecutionError(f"Unknown built-in tool '{name}'")
+
+
+async def _workspace_path_for_task(task_id: str) -> str:
+    from ..services import workspace_manager
+    ws = await workspace_manager.get_workspace_for_task(task_id)
+    if not ws:
+        raise ToolExecutionError("This task has no workspace yet — the repository hasn't been provisioned.")
+    return ws.local_path
 
 
 async def _tools_for_config(config: AgentConfiguration) -> List[Dict[str, Any]]:

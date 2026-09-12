@@ -21,7 +21,11 @@ ROLES: List[AgentRole] = list(BUILTIN_AGENT_ROLES)
 _DEFAULT_TOOLS_BY_ROLE: Dict[str, List[str]] = {
     "planner": ["ask_human", "web_search", "perplexity_research"],
     "vision": ["screenshot"],
-    "troubleshoot": ["ask_human"],
+    # view_file/search_files/execute_bash: Troubleshoot's whole job is root-causing a repeated
+    # failure (see custom_agent_service.SEED_ROLES) — being able to actually look around the
+    # workspace and re-run a command mid-reasoning, not just react to whatever context it was
+    # handed upfront, is exactly what that job needs.
+    "troubleshoot": ["ask_human", "view_file", "search_files", "execute_bash"],
 }
 
 
