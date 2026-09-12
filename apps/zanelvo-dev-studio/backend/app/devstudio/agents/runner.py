@@ -10,12 +10,12 @@ import os
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ...db import get_db
 from ..models import AgentConfiguration, AgentRole
 from ..providers.base import LLMResult, ProviderNotConfigured, ProviderNotImplemented
-from ..providers.registry import ModelRegistry
+from ..providers.registry import auto_attempts, ModelRegistry
 from ..services import activity_service, provider_health, usage_tracker
 
 
@@ -82,6 +82,28 @@ def __oid(id_str: str):
     return ObjectId(id_str)
 
 
+def _attempts_for(config: AgentConfiguration, registry: ModelRegistry) -> List[Tuple[str, str]]:
+    """The ordered (provider, model) attempts a call should try, for either mode:
+
+    - auto_provider=True: cascade through every provider that actually has a real credential
+      configured (see providers/registry.py::auto_attempts) — no provider/model ever needs to be
+      picked by hand; a role stays runnable as long as ANY key is set.
+    - auto_provider=False (default): the existing explicit primary -> fallback behavior, unchanged.
+    """
+    if config.auto_provider:
+        attempts = auto_attempts(config.role, registry)
+        if not attempts:
+            raise AgentStepFailed(
+                f"{config.role}: automatic provider selection is on, but no provider has a "
+                "credential configured at all — set at least one API key in Settings > Secrets.",
+                classification="requires_credentials")
+        return attempts
+    attempts = [(config.primary_provider, config.primary_model)]
+    if config.automatic_fallback and config.fallback_provider and config.fallback_model:
+        attempts.append((config.fallback_provider, config.fallback_model))
+    return attempts
+
+
 async def call_structured(registry: ModelRegistry, config: AgentConfiguration, task_id: str,
                            role: AgentRole, system: str, prompt: str, action: str,
                            plan_item_id: Optional[str] = None,
@@ -104,9 +126,7 @@ async def call_structured(registry: ModelRegistry, config: AgentConfiguration, t
         if tools:
             return await call_with_tools(registry, config, task_id, role, system, prompt, action,
                                           tools, plan_item_id=plan_item_id, max_tokens=max_tokens)
-    attempts = [(config.primary_provider, config.primary_model)]
-    if config.automatic_fallback and config.fallback_provider and config.fallback_model:
-        attempts.append((config.fallback_provider, config.fallback_model))
+    attempts = _attempts_for(config, registry)
 
     last_err: Optional[Exception] = None
     classification = "error"
@@ -507,9 +527,7 @@ async def call_with_tools(registry: ModelRegistry, config: AgentConfiguration, t
     implement generate_with_tools() raises ProviderNotConfigured from the base class default,
     which IS the fallback trigger — a role misconfigured onto a non-tool-capable model degrades
     the same way an unconfigured-credentials one does, never hangs."""
-    attempts = [(config.primary_provider, config.primary_model)]
-    if config.automatic_fallback and config.fallback_provider and config.fallback_model:
-        attempts.append((config.fallback_provider, config.fallback_model))
+    attempts = _attempts_for(config, registry)
     tools_by_name = {t["name"]: t for t in tools}
 
     last_err: Optional[Exception] = None

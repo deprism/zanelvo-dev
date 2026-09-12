@@ -355,6 +355,7 @@ async def get_agent_configs(user: str = Depends(require_devstudio_access)):
 
 class AgentConfigBody(BaseModel):
     enabled: Optional[bool] = None
+    auto_provider: Optional[bool] = None
     primary_provider: Optional[str] = None
     primary_model: Optional[str] = None
     fallback_provider: Optional[str] = None

@@ -164,13 +164,14 @@ const PROVIDER_LABELS: Record<string, string> = {
 };
 
 const EDITABLE_FIELDS = [
-  "enabled", "primary_provider", "primary_model", "fallback_provider", "fallback_model",
+  "enabled", "auto_provider", "primary_provider", "primary_model", "fallback_provider", "fallback_model",
   "reasoning_level", "max_attempts", "automatic_fallback", "mcp_servers", "tools_enabled",
 ] as const;
 
 type ModelInfo = { id: string; provider: string; label: string };
 type AgentDraft = {
   enabled: boolean;
+  auto_provider: boolean;
   primary_provider: string;
   primary_model: string;
   fallback_provider: string | null;
@@ -353,6 +354,7 @@ export function AgentsPanel() {
       const d = drafts[role];
       const { data } = await devstudio.updateAgentConfig(role, {
         enabled: d.enabled,
+        auto_provider: d.auto_provider,
         primary_provider: d.primary_provider,
         primary_model: d.primary_model,
         fallback_provider: d.fallback_provider || null,
@@ -468,8 +470,14 @@ export function AgentsPanel() {
                   <span className="font-medium text-white/85 text-xs flex-shrink-0">{roleLabel(role)}</span>
                   {!builtinRoles.includes(role) && <Badge tone="brand" className="flex-shrink-0">custom</Badge>}
                   <span className="text-white/35 text-[11px] truncate min-w-0">
-                    {cfg.primary_provider}/{cfg.primary_model || "—"}
-                    {cfg.fallback_model && <span> → {cfg.fallback_provider}/{cfg.fallback_model}</span>}
+                    {cfg.auto_provider ? (
+                      "Auto (whatever API key is configured)"
+                    ) : (
+                      <>
+                        {cfg.primary_provider}/{cfg.primary_model || "—"}
+                        {cfg.fallback_model && <span> → {cfg.fallback_provider}/{cfg.fallback_model}</span>}
+                      </>
+                    )}
                   </span>
                   <div className="ml-auto flex items-center gap-1.5 flex-shrink-0">
                     {(cfg.mcp_servers?.length || cfg.tools_enabled?.length) ? (
@@ -484,7 +492,12 @@ export function AgentsPanel() {
 
                 {isOpen && (
                   <div className="px-3 pb-3 pt-1 space-y-2.5 text-xs border-t border-white/[0.06] animate-fade-in">
-                    <div className="flex items-center justify-end pt-2.5">
+                    <div className="flex items-center justify-between pt-2.5">
+                      <label className="flex items-center gap-1.5 text-white/60 cursor-pointer">
+                        <input type="checkbox" className="accent-indigo-500" checked={cfg.auto_provider}
+                          onChange={(e) => setField(role, "auto_provider", e.target.checked)} />
+                        Auto (use whatever API key I've configured)
+                      </label>
                       <label className="flex items-center gap-1.5 text-white/60 cursor-pointer">
                         <input type="checkbox" className="accent-indigo-500" checked={cfg.enabled}
                           onChange={(e) => setField(role, "enabled", e.target.checked)} />
@@ -492,44 +505,54 @@ export function AgentsPanel() {
                       </label>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <div className="text-white/40 mb-1">Primary provider</div>
-                        <Select value={cfg.primary_provider} options={providerOptions}
-                          onChange={(e) => {
-                            const provider = e.target.value;
-                            const firstModel = (modelsByProvider[provider] || [])[0]?.id || "";
-                            setDrafts((d) => ({ ...d, [role]: { ...d[role], primary_provider: provider, primary_model: firstModel } }));
-                          }} />
+                    {cfg.auto_provider ? (
+                      <div className="text-[11px] text-white/40 rounded-md border border-white/10 bg-white/[0.02] px-2.5 py-2">
+                        No provider or model to pick — this role tries every API key you've set,
+                        most-suited-for-this-role first, and moves to the next one on any error.
+                        Uncheck to pick a specific provider/model instead.
                       </div>
-                      <div>
-                        <div className="text-white/40 mb-1">Primary model</div>
-                        <Select value={cfg.primary_model} options={modelOptions(cfg.primary_provider)}
-                          onChange={(e) => setField(role, "primary_model", e.target.value)} />
-                      </div>
-                    </div>
+                    ) : (
+                      <>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <div className="text-white/40 mb-1">Primary provider</div>
+                            <Select value={cfg.primary_provider} options={providerOptions}
+                              onChange={(e) => {
+                                const provider = e.target.value;
+                                const firstModel = (modelsByProvider[provider] || [])[0]?.id || "";
+                                setDrafts((d) => ({ ...d, [role]: { ...d[role], primary_provider: provider, primary_model: firstModel } }));
+                              }} />
+                          </div>
+                          <div>
+                            <div className="text-white/40 mb-1">Primary model</div>
+                            <Select value={cfg.primary_model} options={modelOptions(cfg.primary_provider)}
+                              onChange={(e) => setField(role, "primary_model", e.target.value)} />
+                          </div>
+                        </div>
 
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <div className="text-white/40 mb-1">Fallback provider</div>
-                        <Select value={cfg.fallback_provider || ""}
-                          options={[{ value: "", label: "None" }, ...providerOptions]}
-                          onChange={(e) => {
-                            const provider = e.target.value;
-                            const firstModel = provider ? (modelsByProvider[provider] || [])[0]?.id || "" : "";
-                            setDrafts((d) => ({
-                              ...d,
-                              [role]: { ...d[role], fallback_provider: provider || null, fallback_model: firstModel || null },
-                            }));
-                          }} />
-                      </div>
-                      <div>
-                        <div className="text-white/40 mb-1">Fallback model</div>
-                        <Select value={cfg.fallback_model || ""} disabled={!cfg.fallback_provider}
-                          options={cfg.fallback_provider ? modelOptions(cfg.fallback_provider) : [{ value: "", label: "—" }]}
-                          onChange={(e) => setField(role, "fallback_model", e.target.value)} />
-                      </div>
-                    </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <div className="text-white/40 mb-1">Fallback provider</div>
+                            <Select value={cfg.fallback_provider || ""}
+                              options={[{ value: "", label: "None" }, ...providerOptions]}
+                              onChange={(e) => {
+                                const provider = e.target.value;
+                                const firstModel = provider ? (modelsByProvider[provider] || [])[0]?.id || "" : "";
+                                setDrafts((d) => ({
+                                  ...d,
+                                  [role]: { ...d[role], fallback_provider: provider || null, fallback_model: firstModel || null },
+                                }));
+                              }} />
+                          </div>
+                          <div>
+                            <div className="text-white/40 mb-1">Fallback model</div>
+                            <Select value={cfg.fallback_model || ""} disabled={!cfg.fallback_provider}
+                              options={cfg.fallback_provider ? modelOptions(cfg.fallback_provider) : [{ value: "", label: "—" }]}
+                              onChange={(e) => setField(role, "fallback_model", e.target.value)} />
+                          </div>
+                        </div>
+                      </>
+                    )}
 
                     <div className="grid grid-cols-3 gap-2">
                       <div>

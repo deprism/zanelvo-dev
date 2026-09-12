@@ -50,7 +50,7 @@ that need them, without changing what ships to everyone else.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Tuple, Type
 
 from .anthropic_provider import AnthropicProvider
 from .base import LLMProvider, ModelInfo
@@ -118,6 +118,58 @@ def preset_for_role(preset: str, role: str) -> Dict[str, Optional[str]]:
     return p.get(role, p["default"])
 
 
+# A reasonable, real, currently-served model for each provider — used by auto_attempts() below for
+# any configured provider that isn't already the role's own curated primary/fallback choice (which
+# is used instead when it applies, so curation from MODEL_PRESETS is never discarded, just extended
+# to "and also try whatever else you've configured a key for").
+_DEFAULT_MODEL_BY_PROVIDER: Dict[str, str] = {
+    "anthropic": "claude-sonnet-5",
+    "gemini": "gemini-3.1-pro-preview",
+    "openai": "gpt-5.6-terra",
+    "bedrock": "anthropic.claude-sonnet-5-v1:0",
+    "gemini_enterprise": "gemini-3.1-pro-preview",
+    "emergent": "claude-sonnet-5",
+}
+
+# Global cascade order for providers the role's own preset doesn't mention — native API-key
+# providers first (the common case), cloud-account providers and Emergent last, since those need
+# extra setup (AWS/GCP credentials, a separate Universal Key) a founder is less likely to have
+# configured incidentally.
+_AUTO_FALLBACK_ORDER = ["anthropic", "gemini", "openai", "bedrock", "gemini_enterprise", "emergent"]
+
+
+def auto_attempts(role: str, registry: "ModelRegistry", preset: str = "BALANCED") -> List[Tuple[str, str]]:
+    """Builds a primary->fallback->...  attempt list purely from which providers actually have a
+    real credential configured (registry.is_configured), for AgentConfiguration.auto_provider=True.
+
+    Order: the role's own BALANCED-preset provider(s) first if configured (preserving this
+    project's existing per-role curation — e.g. Design still prefers Gemini, Reviewer still prefers
+    OpenAI, when those keys are set), then every other configured provider in a fixed general
+    order. Returns [] if literally no provider has a credential configured at all — the caller
+    turns that into a clear "requires_credentials" AgentStepFailed rather than trying anything."""
+    role_preset = preset_for_role(preset, role)
+    ordered_candidates: List[str] = []
+    for key in ("primary_provider", "fallback_provider"):
+        name = role_preset.get(key)
+        if name and name not in ordered_candidates:
+            ordered_candidates.append(name)
+    for name in _AUTO_FALLBACK_ORDER:
+        if name not in ordered_candidates:
+            ordered_candidates.append(name)
+
+    attempts: List[Tuple[str, str]] = []
+    for name in ordered_candidates:
+        if not registry.is_configured(name):
+            continue
+        model = None
+        if role_preset.get("primary_provider") == name:
+            model = role_preset.get("primary_model")
+        elif role_preset.get("fallback_provider") == name:
+            model = role_preset.get("fallback_model")
+        attempts.append((name, model or _DEFAULT_MODEL_BY_PROVIDER.get(name, "")))
+    return attempts
+
+
 class ModelRegistry:
     """Live registry of instantiated providers for one request/task run. Instantiate once per
     orchestration run (providers are cheap; API keys are resolved once via SettingsService).
@@ -137,6 +189,21 @@ class ModelRegistry:
                 raise ValueError(f"Unknown provider: {provider_name}")
             self._instances[provider_name] = cls(self._api_keys.get(provider_name))
         return self._instances[provider_name]
+
+    def is_configured(self, provider_name: str) -> bool:
+        """True only if this provider has a real credential set — never a network call, just the
+        same presence check routes.py's /capabilities endpoint already makes per provider. Used by
+        auto_attempts() to build a cascade purely from what's actually usable."""
+        value = self._api_keys.get(provider_name)
+        if provider_name == "bedrock":
+            # Key pair is optional (the default AWS credential chain can cover it) — region is the
+            # one thing BedrockProvider can't fall back on, so it's the real readiness signal.
+            return bool((value or {}).get("region"))
+        if provider_name == "gemini_enterprise":
+            # Service account JSON is optional (Application Default Credentials can cover it) —
+            # project id is the one thing GeminiEnterpriseProvider can't fall back on.
+            return bool((value or {}).get("project_id"))
+        return bool(value)
 
     def list_all_models(self) -> List[ModelInfo]:
         out: List[ModelInfo] = []

@@ -161,6 +161,11 @@ class AgentConfiguration(BaseDocument):
     reasoning_level: Optional[Literal["low", "medium", "high"]] = None
     max_attempts: int = 2
     automatic_fallback: bool = True
+    # When True, primary_provider/primary_model/fallback_provider/fallback_model are ignored: the
+    # runner instead cascades through every provider that actually has a real credential
+    # configured (see providers/registry.py::auto_attempts), so a founder never has to pick a
+    # provider/model at all — just set whichever API key(s) they have.
+    auto_provider: bool = False
     # Non-empty in either field switches this role's calls onto the tool-calling loop (see
     # agents/runner.py::call_with_tools) instead of a plain one-shot structured call — the model
     # can then call any tool from these MCP servers plus these built-in tools before answering.
