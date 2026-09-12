@@ -179,6 +179,203 @@ def test_execute_bash_missing_command_raises():
         asyncio.run(_run_builtin_tool("execute_bash", {}, task_id="t1", role="troubleshoot"))
 
 
+class _FakeCursor:
+    def __init__(self, docs):
+        self._docs = docs
+
+    def sort(self, *a, **kw):
+        return self
+
+    def limit(self, *a, **kw):
+        return self
+
+    def __aiter__(self):
+        return self._aiter()
+
+    async def _aiter(self):
+        for d in self._docs:
+            yield d
+
+
+def test_view_logs_summarizes_real_runs_and_failures(monkeypatch):
+    class _FakeCollection:
+        def find(self, *a, **kw):
+            return _FakeCursor([
+                {"role": "backend", "provider": "anthropic", "model": "claude-sonnet-5",
+                 "status": "failed", "action": "Implementing: fix bug", "result_summary": "TypeError"},
+            ])
+
+    class _FakeDB:
+        ds_agent_runs = _FakeCollection()
+
+    monkeypatch.setattr(runner, "get_db", lambda: _FakeDB())
+
+    async def fake_failure_history(task_id, limit=20):
+        return [{"failure_class": "type_error", "command": "pytest", "occurrences": 2,
+                  "normalized_error": "TypeError: NoneType is not callable"}]
+
+    monkeypatch.setattr("app.devstudio.services.anti_loop.failure_history", fake_failure_history)
+
+    result = asyncio.run(_run_builtin_tool("view_logs", {}, task_id="t1", role="troubleshoot"))
+    assert "backend via anthropic/claude-sonnet-5: failed" in result
+    assert "TypeError" in result
+    assert "type_error" in result and "2x" in result
+
+
+def test_deployment_debugger_lists_recent_runs(monkeypatch):
+    from app.devstudio.services import github_provider
+
+    class _FakeProject:
+        github_owner = "founder"
+        github_repo = "my-plugin"
+
+    async def fake_project(task_id):
+        return _FakeProject()
+
+    async def fake_list_runs(owner, repo, limit=10):
+        assert (owner, repo) == ("founder", "my-plugin")
+        return [{"id": 42, "name": "CI", "status": "completed", "conclusion": "failure",
+                  "head_branch": "main", "head_sha": "abc1234", "html_url": "https://x", "created_at": "now"}]
+
+    monkeypatch.setattr(runner, "_project_for_task", fake_project)
+    monkeypatch.setattr(github_provider, "list_workflow_runs", fake_list_runs)
+
+    result = asyncio.run(_run_builtin_tool("deployment_debugger", {}, task_id="t1", role="deployment"))
+    assert "run 42" in result and "failure" in result
+
+
+def test_deployment_debugger_inspects_a_specific_run(monkeypatch):
+    from app.devstudio.services import github_provider
+
+    class _FakeProject:
+        github_owner = "founder"
+        github_repo = "my-plugin"
+
+    async def fake_project(task_id):
+        return _FakeProject()
+
+    async def fake_jobs(owner, repo, run_id):
+        assert run_id == 42
+        return [{"id": 1, "name": "build", "status": "completed", "conclusion": "failure",
+                  "steps": [{"name": "Run tests", "status": "completed", "conclusion": "failure"}]}]
+
+    monkeypatch.setattr(runner, "_project_for_task", fake_project)
+    monkeypatch.setattr(github_provider, "get_workflow_run_jobs", fake_jobs)
+
+    result = asyncio.run(_run_builtin_tool("deployment_debugger", {"run_id": 42},
+                                             task_id="t1", role="deployment"))
+    assert "Run tests: completed/failure" in result
+
+
+def test_deployment_debugger_wraps_github_errors(monkeypatch):
+    from app.devstudio.services import github_provider
+
+    class _FakeProject:
+        github_owner = "founder"
+        github_repo = "my-plugin"
+
+    async def fake_project(task_id):
+        return _FakeProject()
+
+    async def fake_list_runs(owner, repo, limit=10):
+        raise github_provider.GitHubError("GitHub token rejected (401)")
+
+    monkeypatch.setattr(runner, "_project_for_task", fake_project)
+    monkeypatch.setattr(github_provider, "list_workflow_runs", fake_list_runs)
+
+    with pytest.raises(ToolExecutionError, match="401"):
+        asyncio.run(_run_builtin_tool("deployment_debugger", {}, task_id="t1", role="deployment"))
+
+
+def test_analyze_image_requires_a_question():
+    with pytest.raises(ToolExecutionError, match="question"):
+        asyncio.run(_run_builtin_tool("analyze_image", {}, task_id="t1", role="vision"))
+
+
+def test_analyze_image_requires_registry_and_config_in_context():
+    with pytest.raises(ToolExecutionError, match="context"):
+        asyncio.run(_run_builtin_tool("analyze_image", {"question": "well?"}, task_id="t1", role="vision"))
+
+
+def test_analyze_image_requires_an_existing_screenshot(monkeypatch):
+    from app.devstudio.services import browser_service
+
+    async def fake_list_screenshots(task_id):
+        return []
+
+    monkeypatch.setattr(browser_service, "list_screenshots", fake_list_screenshots)
+
+    class _FakeRegistry:
+        def get(self, name):
+            raise AssertionError("should never reach provider lookup with no screenshots")
+
+    with pytest.raises(ToolExecutionError, match="screenshot"):
+        asyncio.run(_run_builtin_tool("analyze_image", {"question": "well?"}, task_id="t1", role="vision",
+                                        registry=_FakeRegistry(), config=object()))
+
+
+def test_analyze_image_analyzes_the_real_captured_screenshot(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.devstudio.services import browser_service
+
+    shot_path = tmp_path / "shot.png"
+    shot_path.write_bytes(b"\x89PNG\r\n\x1a\nfakepngbytes")
+
+    async def fake_list_screenshots(task_id):
+        return [SimpleNamespace(id="s1", path=str(shot_path))]
+
+    monkeypatch.setattr(browser_service, "list_screenshots", fake_list_screenshots)
+
+    captured = {}
+
+    class _FakeProvider:
+        def supports_vision(self, model):
+            return True
+
+        async def generate_with_vision(self, *, system, prompt, model, images_b64):
+            captured.update(prompt=prompt, model=model, image_count=len(images_b64))
+            return SimpleNamespace(text="The button looks centered.")
+
+    class _FakeRegistry:
+        def get(self, name):
+            assert name == "anthropic"
+            return _FakeProvider()
+
+    config = SimpleNamespace(primary_provider="anthropic", primary_model="claude-sonnet-5")
+    result = asyncio.run(_run_builtin_tool(
+        "analyze_image", {"question": "Is the button centered?"}, task_id="t1", role="vision",
+        registry=_FakeRegistry(), config=config))
+
+    assert result == "The button looks centered."
+    assert captured["prompt"] == "Is the button centered?"
+    assert captured["image_count"] == 1
+
+
+def test_analyze_image_refuses_a_non_vision_model(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.devstudio.services import browser_service
+
+    async def fake_list_screenshots(task_id):
+        return [SimpleNamespace(id="s1", path="/tmp/does-not-need-to-exist-for-this-check.png")]
+
+    monkeypatch.setattr(browser_service, "list_screenshots", fake_list_screenshots)
+
+    class _FakeProvider:
+        def supports_vision(self, model):
+            return False
+
+    class _FakeRegistry:
+        def get(self, name):
+            return _FakeProvider()
+
+    config = SimpleNamespace(primary_provider="openai", primary_model="gpt-5.4-mini")
+    with pytest.raises(ToolExecutionError, match="vision"):
+        asyncio.run(_run_builtin_tool("analyze_image", {"question": "well?"}, task_id="t1", role="vision",
+                                        registry=_FakeRegistry(), config=config))
+
+
 def test_seed_roles_cover_the_six_seeded_specialists_with_unique_slugs():
     # "Integration" — the 7th Emergent-style specialist in the original ask — is already a
     # built-in implementer role (models.BUILTIN_AGENT_ROLES), so it isn't re-seeded here.

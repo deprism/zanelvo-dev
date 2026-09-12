@@ -4,7 +4,9 @@ touches ModelRegistry/AgentConfiguration, so role modules stay short and declara
 """
 from __future__ import annotations
 
+import base64
 import json
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -239,10 +241,41 @@ BUILTIN_TOOLS: Dict[str, Dict[str, Any]] = {
             "command": {"type": "string"}, "cwd_subdir": {"type": "string"}},
             "required": ["command"]},
     },
+    "view_logs": {
+        "name": "view_logs",
+        "description": "See this task's own real recent activity: agent runs (role, provider/"
+                        "model, status, action) and repeated-failure fingerprints (from the "
+                        "anti-loop engine) — useful for checking what's already been tried before "
+                        "proposing another approach, instead of repeating it blind.",
+        "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer"}}, "required": []},
+    },
+    "deployment_debugger": {
+        "name": "deployment_debugger",
+        "description": "Real GitHub Actions status for this project's connected repo (requires a "
+                        "configured GitHub token). Omit run_id to list recent workflow runs; pass "
+                        "one to see that run's jobs and each job's step-by-step status/conclusion "
+                        "— usually enough to see exactly which step broke a CI/deployment run. "
+                        "Does not fetch raw log text (GitHub serves that as a binary download, out "
+                        "of scope here) — step status is what's actually returned.",
+        "inputSchema": {"type": "object", "properties": {"run_id": {"type": "integer"}}, "required": []},
+    },
+    "analyze_image": {
+        "name": "analyze_image",
+        "description": "Real vision-model analysis of an actual screenshot already captured for "
+                        "this task (via the screenshot tool or browser QA) — e.g. 'does the button "
+                        "look centered?' or 'describe what's visually broken here'. Requires this "
+                        "role's own model to support vision; fails with a clear reason if it "
+                        "doesn't rather than guessing from the filename.",
+        "inputSchema": {"type": "object", "properties": {
+            "question": {"type": "string"}, "screenshot_id": {"type": "string"}},
+            "required": ["question"]},
+    },
 }
 
 
-async def _run_builtin_tool(name: str, arguments: Dict[str, Any], *, task_id: str, role: AgentRole) -> str:
+async def _run_builtin_tool(name: str, arguments: Dict[str, Any], *, task_id: str, role: AgentRole,
+                              registry: Optional[ModelRegistry] = None,
+                              config: Optional[AgentConfiguration] = None) -> str:
     if name == "ask_human":
         from ..services import task_manager
         question = str(arguments.get("question", "")).strip() or "The agent needs your input."
@@ -314,7 +347,91 @@ async def _run_builtin_tool(name: str, arguments: Dict[str, Any], *, task_id: st
         except execution_service.CommandBlocked as e:
             raise ToolExecutionError(str(e)) from e
         return f"exit_code={run.exit_code}\nstdout:\n{run.stdout_tail}\nstderr:\n{run.stderr_tail}"
+    if name == "view_logs":
+        from ..services import anti_loop
+        limit = int(arguments.get("limit") or 20)
+        runs = [r async for r in get_db().ds_agent_runs.find({"task_id": task_id})
+                 .sort("created_at", -1).limit(limit)]
+        failures = await anti_loop.failure_history(task_id, limit=limit)
+        lines = ["Recent agent runs (most recent first):"]
+        for r in runs:
+            summary = f" — {r['result_summary']}" if r.get("result_summary") else ""
+            lines.append(f"- {r.get('role')} via {r.get('provider')}/{r.get('model')}: "
+                          f"{r.get('status')} ({r.get('action', '')}){summary}")
+        if not runs:
+            lines.append("(none yet)")
+        if failures:
+            lines.append("\nRepeated-failure fingerprints:")
+            for f in failures:
+                lines.append(f"- [{f['failure_class']}] {f['command']}: {f['occurrences']}x — "
+                              f"{f['normalized_error'][:200]}")
+        return "\n".join(lines)
+    if name == "deployment_debugger":
+        from ..services import github_provider
+        project = await _project_for_task(task_id)
+        run_id = arguments.get("run_id")
+        try:
+            if run_id:
+                jobs = await github_provider.get_workflow_run_jobs(
+                    project.github_owner, project.github_repo, int(run_id))
+                if not jobs:
+                    return f"No jobs found for run {run_id}."
+                lines = [f"Run {run_id} — jobs and step status:"]
+                for j in jobs:
+                    lines.append(f"- {j['name']}: {j['status']}/{j['conclusion']}")
+                    for s in j["steps"]:
+                        lines.append(f"    · {s['name']}: {s['status']}/{s['conclusion']}")
+                return "\n".join(lines)
+            runs = await github_provider.list_workflow_runs(project.github_owner, project.github_repo)
+            if not runs:
+                return "No GitHub Actions workflow runs found for this repository."
+            lines = ["Recent workflow runs:"]
+            for r in runs:
+                lines.append(f"- run {r['id']}: {r['name']} ({r['head_branch']}@{r['head_sha']}) "
+                              f"— {r['status']}/{r['conclusion']} — {r['html_url']}")
+            return "\n".join(lines)
+        except github_provider.GitHubError as e:
+            raise ToolExecutionError(str(e)) from e
+    if name == "analyze_image":
+        from ..services import browser_service
+        question = str(arguments.get("question", "")).strip()
+        if not question:
+            raise ToolExecutionError("analyze_image requires a 'question'")
+        if registry is None or config is None:
+            raise ToolExecutionError("analyze_image isn't available in this call context.")
+        screenshots = await browser_service.list_screenshots(task_id)
+        if not screenshots:
+            raise ToolExecutionError("No screenshots exist for this task yet — call the screenshot "
+                                       "tool first.")
+        provider = registry.get(config.primary_provider)
+        if not provider.supports_vision(config.primary_model):
+            raise ToolExecutionError(
+                f"{config.primary_provider}/{config.primary_model} does not support vision.")
+        screenshot_id = arguments.get("screenshot_id")
+        shot = next((s for s in screenshots if s.id == screenshot_id), screenshots[0]) \
+            if screenshot_id else screenshots[0]
+        if not os.path.isfile(shot.path):
+            raise ToolExecutionError(f"Screenshot file missing on disk: {shot.path}")
+        with open(shot.path, "rb") as f:
+            image_b64 = base64.b64encode(f.read()).decode()
+        result = await provider.generate_with_vision(
+            system="You are analyzing a real screenshot captured by this app's own browser QA. "
+                    "Describe only what you can actually see — never guess at content outside the "
+                    "image.",
+            prompt=question, model=config.primary_model, images_b64=[image_b64])
+        return result.text
     raise ToolExecutionError(f"Unknown built-in tool '{name}'")
+
+
+async def _project_for_task(task_id: str):
+    from ..services import repository_service, task_manager
+    task = await task_manager.get_task(task_id)
+    if not task:
+        raise ToolExecutionError("Task not found.")
+    project = await repository_service.get_project(task.project_id)
+    if not project:
+        raise ToolExecutionError("Project not found for this task.")
+    return project
 
 
 async def _workspace_path_for_task(task_id: str) -> str:
@@ -335,7 +452,9 @@ async def _tools_for_config(config: AgentConfiguration) -> List[Dict[str, Any]]:
 
 
 async def _execute_tool_call(call: Dict[str, Any], tools_by_name: Dict[str, Dict[str, Any]], *,
-                              task_id: str, role: AgentRole) -> Dict[str, Any]:
+                              task_id: str, role: AgentRole,
+                              registry: Optional[ModelRegistry] = None,
+                              config: Optional[AgentConfiguration] = None) -> Dict[str, Any]:
     name = call["name"]
     tool = tools_by_name.get(name)
     try:
@@ -346,7 +465,8 @@ async def _execute_tool_call(call: Dict[str, Any], tools_by_name: Dict[str, Dict
                 raise ToolExecutionError(f"MCP server '{tool['_mcp_server']}' is no longer configured")
             content = await mcp_service.call_tool(server, name, call.get("arguments") or {})
         elif name in BUILTIN_TOOLS:
-            content = await _run_builtin_tool(name, call.get("arguments") or {}, task_id=task_id, role=role)
+            content = await _run_builtin_tool(name, call.get("arguments") or {}, task_id=task_id, role=role,
+                                                registry=registry, config=config)
         else:
             content = f"ERROR: unknown tool '{name}'"
         return {"id": call["id"], "content": content}
@@ -393,7 +513,8 @@ async def call_with_tools(registry: ModelRegistry, config: AgentConfiguration, t
                 history = result.tool_loop_history
                 executed = []
                 for call in result.tool_calls:
-                    executed.append(await _execute_tool_call(call, tools_by_name, task_id=task_id, role=role))
+                    executed.append(await _execute_tool_call(call, tools_by_name, task_id=task_id, role=role,
+                                                                registry=registry, config=config))
                     await activity_service.emit(task_id, "tool_call", {
                         "role": role, "tool": call["name"],
                         "server": (tools_by_name.get(call["name"]) or {}).get("_mcp_server"),

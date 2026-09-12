@@ -20,12 +20,19 @@ ROLES: List[AgentRole] = list(BUILTIN_AGENT_ROLES)
 # a capability upgrade. Founders can still opt those roles in manually in Settings > Agents.
 _DEFAULT_TOOLS_BY_ROLE: Dict[str, List[str]] = {
     "planner": ["ask_human", "web_search", "perplexity_research"],
-    "vision": ["screenshot"],
-    # view_file/search_files/execute_bash: Troubleshoot's whole job is root-causing a repeated
-    # failure (see custom_agent_service.SEED_ROLES) — being able to actually look around the
-    # workspace and re-run a command mid-reasoning, not just react to whatever context it was
+    # analyze_image: Vision's whole job (see custom_agent_service.SEED_ROLES) is judging whether a
+    # real screenshot matches the intended design — a real vision-model call on that exact image,
+    # not the plain "screenshot" capture tool alone.
+    "vision": ["screenshot", "analyze_image"],
+    # view_file/search_files/execute_bash/view_logs: Troubleshoot's whole job is root-causing a
+    # repeated failure — being able to actually look around the workspace, re-run a command, and
+    # see what's already been tried mid-reasoning, not just react to whatever context it was
     # handed upfront, is exactly what that job needs.
-    "troubleshoot": ["ask_human", "view_file", "search_files", "execute_bash"],
+    "troubleshoot": ["ask_human", "view_file", "search_files", "execute_bash", "view_logs"],
+    # deployment_debugger: Deployment's job is writing the commit/PR description for a reviewed
+    # diff — being able to check real CI status first means it can honestly report it instead of
+    # assuming everything passed.
+    "deployment": ["deployment_debugger"],
 }
 
 

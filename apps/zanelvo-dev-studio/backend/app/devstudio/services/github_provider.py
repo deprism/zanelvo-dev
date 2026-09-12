@@ -112,6 +112,27 @@ async def create_pull_request(owner: str, repo: str, title: str, body: str,
     return {"number": data["number"], "html_url": data["html_url"], "state": data["state"]}
 
 
+async def list_workflow_runs(owner: str, repo: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """Recent GitHub Actions runs for this repo — real CI/deployment status, for the
+    deployment_debugger agent tool (agents/runner.py)."""
+    data = await _get(f"/repos/{owner}/{repo}/actions/runs", params={"per_page": min(limit, 100)})
+    return [{"id": r["id"], "name": r["name"], "status": r["status"], "conclusion": r["conclusion"],
+              "head_branch": r["head_branch"], "head_sha": r["head_sha"][:7],
+              "html_url": r["html_url"], "created_at": r["created_at"]}
+             for r in data.get("workflow_runs", [])]
+
+
+async def get_workflow_run_jobs(owner: str, repo: str, run_id: int) -> List[Dict[str, Any]]:
+    """Per-job, per-step status for one workflow run — real, structured, and usually enough to see
+    exactly which step failed without needing the raw log text (which GitHub serves as a binary
+    blob download via a separate endpoint, out of scope here)."""
+    data = await _get(f"/repos/{owner}/{repo}/actions/runs/{run_id}/jobs")
+    return [{"id": j["id"], "name": j["name"], "status": j["status"], "conclusion": j["conclusion"],
+              "steps": [{"name": s["name"], "status": s["status"], "conclusion": s["conclusion"]}
+                         for s in j.get("steps", [])]}
+             for j in data.get("jobs", [])]
+
+
 async def authenticated_clone_url(owner: str, repo: str) -> str:
     tok = await _token()
     return f"https://x-access-token:{tok}@github.com/{owner}/{repo}.git"

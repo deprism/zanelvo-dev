@@ -31,9 +31,12 @@ def test_default_tools_wired_into_default_config():
     planner_cfg = _default_config("planner")
     assert set(planner_cfg.tools_enabled) == {"ask_human", "web_search", "perplexity_research"}
     vision_cfg = _default_config("vision")
-    assert vision_cfg.tools_enabled == ["screenshot"]
+    assert vision_cfg.tools_enabled == ["screenshot", "analyze_image"]
     troubleshoot_cfg = _default_config("troubleshoot")
-    assert troubleshoot_cfg.tools_enabled == ["ask_human", "view_file", "search_files", "execute_bash"]
+    assert troubleshoot_cfg.tools_enabled == \
+        ["ask_human", "view_file", "search_files", "execute_bash", "view_logs"]
+    deployment_cfg = _default_config("deployment")
+    assert deployment_cfg.tools_enabled == ["deployment_debugger"]
 
 
 def test_default_config_for_unlisted_role_has_no_tools():
