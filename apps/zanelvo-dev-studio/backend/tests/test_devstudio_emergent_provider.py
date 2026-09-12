@@ -9,6 +9,7 @@ from app.devstudio.providers.base import ProviderError, ProviderNotConfigured
 from app.devstudio.providers.emergent_provider import (
     _CATALOG,
     _normalize_error,
+    _sdk,
     EmergentUniversalKeyProvider,
 )
 
@@ -36,6 +37,19 @@ def test_capabilities_are_reported_from_catalog_not_faked():
     assert p.supports_reasoning_levels("claude-opus-5") is True
     # An unknown model reports no capabilities (never fabricates a True).
     assert p.supports_vision("not-a-real-model") is False
+
+
+def test_missing_sdk_error_points_to_the_correct_requirements_file():
+    # Regression test: this error message used to (wrongly) tell founders to
+    # `pip install -r requirements-devstudio.txt`, which deliberately does NOT include
+    # emergentintegrations (see that file's own header — it conflicts with the native OpenAI
+    # provider's pinned version) and so could never actually fix the problem. Only reached when
+    # emergentintegrations genuinely isn't installed, which is the case in this test environment.
+    with pytest.raises(ProviderNotConfigured) as exc_info:
+        _sdk()
+    message = str(exc_info.value)
+    assert "pip install -r requirements-emergent.txt" in message
+    assert "pip install -r requirements-devstudio.txt" not in message
 
 
 def test_generate_without_key_raises_not_configured():

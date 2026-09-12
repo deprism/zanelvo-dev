@@ -6,9 +6,12 @@ class implements the full LLMProvider surface so it is a drop-in `ModelRegistry`
 agents/ or orchestration changes.
 
 Transport: the `emergentintegrations` package (Emergent's own CDN wheel, not PyPI). It is an
-OPTIONAL runtime dependency (see backend/requirements-devstudio.txt) imported lazily via `_sdk()`,
-exactly like `anthropic`/`openai` elsewhere, so the app boots and its deterministic tests pass
-without it installed.
+OPTIONAL runtime dependency kept in its OWN file, backend/requirements-emergent.txt — deliberately
+NOT part of requirements-devstudio.txt, since every published emergentintegrations version hard-pins
+openai==1.99.9, conflicting with requirements-devstudio.txt's openai==1.109.1 pin for the native
+OpenAI provider (see that file's own header for the two ways to combine them). Imported lazily via
+`_sdk()`, exactly like `anthropic`/`openai` elsewhere, so the app boots and its deterministic tests
+pass without it installed.
 
 Model discovery: `emergentintegrations` exposes no live model-list endpoint, so `list_models()`
 returns a curated static catalog of the model IDs the Universal Key actually serves (per Emergent's
@@ -102,9 +105,11 @@ def _sdk():
         return LlmChat, UserMessage, ImageContent, ChatError
     except ImportError as e:  # noqa: BLE001
         raise ProviderNotConfigured(
-            "The 'emergentintegrations' package is not installed in this environment. Install it "
-            "via: pip install -r requirements-devstudio.txt (it ships from Emergent's CDN wheel "
-            "index, see the file header)."
+            "The 'emergentintegrations' package is not installed in this environment. It is NOT "
+            "part of requirements-devstudio.txt (that would conflict with the native OpenAI "
+            "provider's pinned version) — install it via: pip install -r requirements-emergent.txt "
+            "(see that file's header for how to combine it with the native OpenAI provider if you "
+            "need both)."
         ) from e
 
 
