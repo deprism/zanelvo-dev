@@ -11,11 +11,19 @@
 # Install it separately via requirements-emergent.txt (which pins its own compatible openai) if you
 # want Emergent — see that file's header for the tradeoff. Lazily imported either way, so nothing
 # here breaks if it's absent.
-anthropic==0.69.0
+anthropic[vertex]==0.69.0
 openai==1.109.1
 # Also covers GeminiEnterpriseProvider (Vertex AI / Gemini Enterprise Agent Platform) — same SDK,
 # different client auth; google-auth (for service-account credentials) ships as its dependency.
 google-genai==1.75.0
+# google-genai's own async transport (_api_client.py) references aiohttp.ClientConnectorDNSError
+# directly in an `except (...)` tuple — that class was only added in aiohttp 3.10.0. An older,
+# already-installed aiohttp (e.g. one pulled in earlier by an unrelated package) makes ANY network
+# error on a Gemini/Gemini Enterprise call surface as "module 'aiohttp' has no attribute
+# 'ClientConnectorDNSError'" instead of the real error — reproduced directly against the pinned
+# google-genai==1.75.0 source (see the commit that added this line). Floor-pinned, not exact, since
+# this is guarding a minimum SDK feature rather than matching an exact tested release.
+aiohttp>=3.10.0
 playwright==1.55.0
 # boto3's own release cadence is far faster than the pinned packages above and its exact current
 # version wasn't checked against a live index this session (unlike anthropic/openai/google-genai,

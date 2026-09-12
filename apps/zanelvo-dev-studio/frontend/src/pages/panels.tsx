@@ -708,7 +708,8 @@ const SECRET_FIELDS: { key: string; label: string; placeholder: string; group: s
   { key: "aws_session_token", label: "AWS Session Token (optional, for temporary credentials)", placeholder: "…", group: "Amazon Bedrock" },
   { key: "aws_region", label: "AWS Region", placeholder: "us-east-1", group: "Amazon Bedrock" },
   { key: "gcp_project_id", label: "GCP Project ID", placeholder: "my-project-123", group: "Gemini Enterprise Agent Platform" },
-  { key: "gcp_location", label: "GCP Location", placeholder: "us-central1", group: "Gemini Enterprise Agent Platform" },
+  { key: "gcp_location", label: "GCP Location (Gemini models)", placeholder: "us-central1", group: "Gemini Enterprise Agent Platform" },
+  { key: "gcp_claude_region", label: "Claude Region (optional — Claude models only; \"global\", \"us\", \"eu\", or a specific region)", placeholder: "global", group: "Gemini Enterprise Agent Platform" },
   { key: "gcp_service_account_json", label: "Service Account JSON (optional — paste the full key file contents)", placeholder: '{"type": "service_account", …}', group: "Gemini Enterprise Agent Platform", multiline: true },
   { key: "perplexity_api_key", label: "Perplexity API Key", placeholder: "pplx-…", group: "Tools" },
 ];

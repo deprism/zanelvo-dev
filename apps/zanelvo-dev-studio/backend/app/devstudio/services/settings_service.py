@@ -17,7 +17,7 @@ from ..providers.registry import ModelRegistry
 _SECRET_KEYS = ("github_pat", "anthropic_api_key", "openai_api_key", "gemini_api_key",
                  "emergent_universal_key", "aws_access_key_id", "aws_secret_access_key",
                  "aws_session_token", "aws_region", "gcp_project_id", "gcp_location",
-                 "gcp_service_account_json", "perplexity_api_key")
+                 "gcp_claude_region", "gcp_service_account_json", "perplexity_api_key")
 
 
 async def get_settings() -> ApplicationSettings:
@@ -62,6 +62,9 @@ async def get_secret(name: str) -> Optional[str]:
         "aws_region": "AWS_REGION",
         "gcp_project_id": "GOOGLE_CLOUD_PROJECT",
         "gcp_location": "GOOGLE_CLOUD_LOCATION",
+        # Claude-on-Vertex's own region namespace ("global"/"us"/"eu"/a specific region) — distinct
+        # from gcp_location/GOOGLE_CLOUD_LOCATION, which is Gemini's. See gemini_enterprise_provider.
+        "gcp_claude_region": "ANTHROPIC_VERTEX_REGION",
         # Not the real GOOGLE_APPLICATION_CREDENTIALS (a file path, already read automatically by
         # google-auth's ADC chain) — this is Dev Studio's own name for the raw JSON key contents,
         # for parity with how every other secret here is set via an env var override.
@@ -106,6 +109,7 @@ async def build_model_registry() -> ModelRegistry:
         "gemini_enterprise": {
             "project_id": await get_secret("gcp_project_id"),
             "location": await get_secret("gcp_location"),
+            "claude_region": await get_secret("gcp_claude_region"),
             "service_account_json": await get_secret("gcp_service_account_json"),
         },
     }
