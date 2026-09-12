@@ -12,6 +12,7 @@ from typing import Dict, Optional
 from ...db import get_db
 from ..models import TestRun
 from . import command_policy
+from .proc_util import resolve_argv
 
 _running: Dict[str, asyncio.subprocess.Process] = {}  # test_run_id -> process, for cancellation
 
@@ -55,7 +56,7 @@ async def run_command(workspace_path: str, task_id: str, command: str, test_type
     t0 = time.monotonic()
     try:
         proc = await asyncio.create_subprocess_exec(
-            *shlex.split(command), cwd=cwd,
+            *resolve_argv(shlex.split(command)), cwd=cwd,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             env={**os.environ, "CI": "true"},
         )

@@ -39,3 +39,49 @@ def test_remote_head_sha_returns_none_when_ref_not_found(monkeypatch):
     service = git_service.GitService()
     sha = asyncio.run(service.remote_head_sha("/some/mirror.git", "does-not-exist"))
     assert sha is None
+
+
+def test_commit_passes_an_explicit_identity_via_c_flags_not_ambient_config(monkeypatch):
+    # Regression test: git commit used to rely entirely on the machine's global git config
+    # (~/.gitconfig) for user.name/user.email — reproduced live as "Please tell me who you are"
+    # on a fresh machine that never ran `git config --global user.name/email` (the common case for
+    # a founder's first install). -c overrides on the invocation itself never depend on that.
+    captured = {}
+
+    async def fake_run(args, cwd, timeout=120, env=None):
+        captured["args"] = args
+        return git_service.CommandResult(ok=True, stdout="", stderr="", returncode=0)
+
+    async def fake_current_sha(dest):
+        return "deadbeef"
+
+    monkeypatch.setattr(git_service, "_run", fake_run)
+    service = git_service.GitService()
+    monkeypatch.setattr(service, "current_sha", fake_current_sha)
+
+    asyncio.run(service.commit("/some/workspace", "a commit message",
+                                 author=("Ada Lovelace", "ada@users.noreply.github.com")))
+
+    assert captured["args"] == [
+        "git", "-c", "user.name=Ada Lovelace", "-c", "user.email=ada@users.noreply.github.com",
+        "commit", "-m", "a commit message",
+    ]
+
+
+def test_commit_without_an_identity_does_not_add_c_flags(monkeypatch):
+    captured = {}
+
+    async def fake_run(args, cwd, timeout=120, env=None):
+        captured["args"] = args
+        return git_service.CommandResult(ok=True, stdout="", stderr="", returncode=0)
+
+    async def fake_current_sha(dest):
+        return "deadbeef"
+
+    monkeypatch.setattr(git_service, "_run", fake_run)
+    service = git_service.GitService()
+    monkeypatch.setattr(service, "current_sha", fake_current_sha)
+
+    asyncio.run(service.commit("/some/workspace", "a commit message"))
+
+    assert captured["args"] == ["git", "commit", "-m", "a commit message"]

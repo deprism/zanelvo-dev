@@ -9,6 +9,7 @@ from bson import ObjectId
 
 from ...db import get_db
 from ..models import Checkpoint, Workspace
+from . import github_provider
 from .git_service import GitService
 
 
@@ -19,7 +20,8 @@ class RestoreNotConfirmed(Exception):
 async def create_checkpoint(task_id: str, workspace: Workspace, label: str,
                              reason: Optional[str] = None) -> Checkpoint:
     git = GitService(task_id=task_id)
-    await git.commit(workspace.local_path, f"[checkpoint] {label}", allow_empty=True)
+    identity = await github_provider.git_identity()
+    await git.commit(workspace.local_path, f"[checkpoint] {label}", allow_empty=True, author=identity)
     sha = await git.current_sha(workspace.local_path)
     tag = f"ds-checkpoint-{sha[:10]}"
     await git.tag_checkpoint(workspace.local_path, tag)

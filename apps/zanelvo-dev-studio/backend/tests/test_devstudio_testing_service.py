@@ -94,6 +94,45 @@ def test_gradle_project_is_discovered_and_uses_the_wrapper_when_present(tmp_path
     assert profile.java_test_cmd == "./gradlew test"
 
 
+def test_maven_wrapper_uses_the_dot_cmd_variant_on_windows(tmp_path, monkeypatch):
+    # Regression test: mvnw (a Unix "#!/bin/sh" script) simply can't run on Windows at all — the
+    # real wrapper there is mvnw.cmd, a different file that a real Maven wrapper setup also ships.
+    # Picking the Unix one on Windows would make every Java build/test command fail outright.
+    monkeypatch.setattr(testing_service, "_IS_WINDOWS", True)
+    _write(tmp_path / "plugin" / "pom.xml", "<project></project>")
+    _write(tmp_path / "plugin" / "mvnw", "#!/bin/sh\n")
+    _write(tmp_path / "plugin" / "mvnw.cmd", "@echo off\n")
+
+    profile = testing_service.discover(str(tmp_path))
+    assert profile.java_build_cmd == "./mvnw.cmd -B package"
+    assert profile.java_test_cmd == "./mvnw.cmd -B test"
+    decision = command_policy.evaluate(profile.java_build_cmd)
+    assert decision.allowed, f"should be allowed: {decision.reason}"
+
+
+def test_maven_wrapper_falls_back_to_system_mvn_on_windows_without_a_dot_cmd_wrapper(tmp_path, monkeypatch):
+    # Only the Unix mvnw is present (no mvnw.cmd) — Windows must not try to run the Unix script.
+    monkeypatch.setattr(testing_service, "_IS_WINDOWS", True)
+    _write(tmp_path / "pom.xml", "<project></project>")
+    _write(tmp_path / "mvnw", "#!/bin/sh\n")
+
+    profile = testing_service.discover(str(tmp_path))
+    assert profile.java_build_cmd == "mvn -B package"
+
+
+def test_gradle_wrapper_uses_the_dot_bat_variant_on_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(testing_service, "_IS_WINDOWS", True)
+    _write(tmp_path / "build.gradle.kts", "")
+    _write(tmp_path / "gradlew", "#!/bin/sh\n")
+    _write(tmp_path / "gradlew.bat", "@echo off\n")
+
+    profile = testing_service.discover(str(tmp_path))
+    assert profile.java_build_cmd == "./gradlew.bat build"
+    assert profile.java_test_cmd == "./gradlew.bat test"
+    decision = command_policy.evaluate(profile.java_build_cmd)
+    assert decision.allowed, f"should be allowed: {decision.reason}"
+
+
 def test_java_build_and_test_commands_are_selected_and_pass_command_policy(tmp_path):
     _write(tmp_path / "pom.xml", "<project></project>")
 

@@ -15,6 +15,12 @@
  * Requires Python 3.11+ on PATH (see README.md) — this shell does not bundle a Python runtime.
  * If it's missing, or the backend's own dependencies aren't installed, the window shows a plain
  * error/instructions screen instead of a silent failure.
+ *
+ * First-launch dependency install runs as a real streamed subprocess (never spawnSync) with live
+ * progress shown in the window and a bounded timeout — a blocking spawnSync here previously froze
+ * the whole Electron process (the OS marks the window "Not Responding") for the entire pip
+ * install, with no page loaded yet to show what was even happening, which is exactly what made a
+ * merely-slow first install look hung enough to force-quit. See ensureBackendDeps/createWindow.
  */
 const { app, BrowserWindow, shell } = require("electron");
 const { spawn, spawnSync } = require("child_process");
@@ -24,7 +30,29 @@ const http = require("http");
 const net = require("net");
 const path = require("path");
 
-const STATE = { backend: null, mongo: null, backendPort: null, staticPort: null, window: null };
+const STATE = { backend: null, mongo: null, pipInstall: null, backendPort: null, staticPort: null, window: null };
+
+const LOADING_HTML = `<!doctype html><body style="font:14px system-ui;margin:0;height:100vh;
+display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+background:#0B0A16;color:#fff">
+<div style="width:28px;height:28px;border:3px solid rgba(255,255,255,.15);
+border-top-color:#8b5cf6;border-radius:50%;animation:spin 0.8s linear infinite"></div>
+<div id="status" style="color:rgba(255,255,255,.75)">Starting Zanelvo Dev Studio…</div>
+<pre id="log" style="max-width:640px;max-height:220px;overflow:auto;color:rgba(255,255,255,.4);
+font-size:11px;white-space:pre-wrap;margin:0;padding:0 16px"></pre>
+<style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+<script>
+  const statusEl = document.getElementById("status");
+  const logEl = document.getElementById("log");
+  window.electronAPI?.onStatus((status, log) => {
+    if (status) statusEl.textContent = status;
+    if (log) {
+      logEl.textContent += log;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+  });
+</script>
+</body>`;
 
 function resourceDir(name) {
   // Dev: `electron .` run from this folder — sibling ../frontend/dist and ../backend.
@@ -72,18 +100,47 @@ function findPython() {
   return null;
 }
 
+const PIP_INSTALL_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes — generous for a slow/cold pip cache,
+// but bounded: a hang here must surface as a clear error, never sit silently forever.
+
 /** Best-effort dependency install — makes first launch work without a manual `pip install` step
- * when pip has network access; a no-op (fast) on every later launch once packages are present. */
+ * when pip has network access; a no-op (fast) on every later launch once packages are present.
+ * Runs as a real streamed child process (never spawnSync, which would block this entire process —
+ * including window repaint/input — for however long pip takes) so the window stays responsive and
+ * `onLog` can show real progress instead of a frozen screen. */
 function ensureBackendDeps(pythonCmd, backendDir, onLog) {
   const reqs = ["requirements.txt", "requirements-devstudio.txt"].filter((f) =>
     fs.existsSync(path.join(backendDir, f)),
   );
-  if (!reqs.length) return { ok: true };
-  const args = ["-m", "pip", "install", "--disable-pip-version-check", "-q"];
+  if (!reqs.length) return Promise.resolve({ ok: true });
+  const args = ["-m", "pip", "install", "--disable-pip-version-check", "--prefer-binary"];
   for (const f of reqs) args.push("-r", f);
-  const r = spawnSync(pythonCmd, args, { cwd: backendDir, encoding: "utf8" });
-  onLog?.(r.stdout, r.stderr);
-  return { ok: r.status === 0, stderr: r.stderr };
+  return new Promise((resolve) => {
+    const child = spawn(pythonCmd, args, { cwd: backendDir });
+    STATE.pipInstall = child;
+    let stderr = "";
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killTree(child);
+    }, PIP_INSTALL_TIMEOUT_MS);
+    child.stdout?.on("data", (d) => onLog?.(d.toString(), ""));
+    child.stderr?.on("data", (d) => { stderr += d.toString(); onLog?.("", d.toString()); });
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      STATE.pipInstall = null;
+      resolve({ ok: false, stderr: `Could not start ${pythonCmd}: ${err.message}` });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      STATE.pipInstall = null;
+      if (timedOut) {
+        resolve({ ok: false, stderr: `Timed out after ${PIP_INSTALL_TIMEOUT_MS / 60000} minutes.\n${stderr}` });
+        return;
+      }
+      resolve({ ok: code === 0, stderr });
+    });
+  });
 }
 
 async function waitForHealth(port, timeoutMs = 60000) {
@@ -147,8 +204,11 @@ function killTree(child) {
   } catch { /* best effort — the OS reclaims an orphaned child on app exit regardless */ }
 }
 
-/** The whole non-UI startup sequence, isolated from BrowserWindow so it can be exercised (and
- * was, for this change) by a plain Node script without a display — see desktop/test-startup.js. */
+/** The whole non-UI startup sequence, isolated from BrowserWindow so it can be exercised
+ * headlessly (no window ever created) under `electron test-startup.js` (Electron still needs its
+ * own runtime for `app.getPath`/`app.isPackaged`, but never opens a display) — see
+ * desktop/test-startup.js, and the require.main guard at the bottom of this file that keeps
+ * requiring this module for that purpose from also auto-starting the real app. */
 async function startBackendStack(onStatus = () => {}) {
   onStatus("Starting local database…");
   const { MongoMemoryServer } = require("mongodb-memory-server");
@@ -168,7 +228,7 @@ async function startBackendStack(onStatus = () => {}) {
 
   const backendDir = resourceDir("backend");
   onStatus("Installing backend dependencies (first launch only)…");
-  const deps = ensureBackendDeps(pythonCmd, backendDir);
+  const deps = await ensureBackendDeps(pythonCmd, backendDir, (out, err) => onStatus(undefined, out || err));
   if (!deps.ok) {
     throw new Error(
       "Could not install the backend's Python dependencies automatically:\n\n" +
@@ -220,6 +280,7 @@ async function startBackendStack(onStatus = () => {}) {
 }
 
 async function cleanup() {
+  killTree(STATE.pipInstall);
   killTree(STATE.backend);
   if (STATE.mongo) await STATE.mongo.stop().catch(() => {});
 }
@@ -234,9 +295,13 @@ async function createWindow() {
   STATE.window = win;
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: "deny" }; });
 
+  // Shown immediately, before any backend work starts — the window must never sit blank while
+  // startBackendStack runs (see the file header comment for why that mattered).
+  await win.loadURL("data:text/html," + encodeURIComponent(LOADING_HTML));
+
   try {
     const { staticPort } = await startBackendStack((status, log) => {
-      if (status) win.webContents.send?.("startup-status", status);
+      if (status || log) win.webContents.send?.("startup-status", status, log);
       if (log) console.log(log);
     });
     await win.loadURL(`http://127.0.0.1:${staticPort}/`);
@@ -251,16 +316,22 @@ async function createWindow() {
   }
 }
 
-app.whenReady().then(createWindow);
-app.on("window-all-closed", async () => { await cleanup(); if (process.platform !== "darwin") app.quit(); });
-app.on("before-quit", cleanup);
-app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+// Guarded so `require("./main.js")` (see test-startup.js) can reuse startBackendStack/cleanup
+// without ALSO triggering the real app lifecycle (a second, redundant createWindow()) — only
+// `electron main.js` itself (require.main === module) auto-starts the window.
+if (require.main === module) {
+  app.whenReady().then(createWindow);
+  app.on("window-all-closed", async () => { await cleanup(); if (process.platform !== "darwin") app.quit(); });
+  app.on("before-quit", cleanup);
+  app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 
-// Belt-and-suspenders against an orphaned backend/mongod: `before-quit`/`window-all-closed` cover
-// a normal quit, but killTree() is synchronous (safe to call from a signal handler) so it also
-// runs here for the case those Electron events don't fire — e.g. the OS sending SIGTERM/SIGINT
-// directly to this process (killed externally, not via a window close) rather than app.quit().
-process.on("SIGINT", () => { killTree(STATE.backend); process.exit(0); });
-process.on("SIGTERM", () => { killTree(STATE.backend); process.exit(0); });
+  // Belt-and-suspenders against an orphaned backend/mongod: `before-quit`/`window-all-closed`
+  // cover a normal quit, but killTree() is synchronous (safe to call from a signal handler) so it
+  // also runs here for the case those Electron events don't fire — e.g. the OS sending SIGTERM/
+  // SIGINT directly to this process (killed externally, not via a window close) rather than
+  // app.quit().
+  process.on("SIGINT", () => { killTree(STATE.backend); process.exit(0); });
+  process.on("SIGTERM", () => { killTree(STATE.backend); process.exit(0); });
+}
 
 module.exports = { startBackendStack, cleanup, resourceDir, getFreePort };

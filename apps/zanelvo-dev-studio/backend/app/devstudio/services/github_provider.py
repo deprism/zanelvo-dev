@@ -7,7 +7,7 @@ its own Settings screen, matching "Secrets remain server-side" / no implicit cre
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -63,6 +63,30 @@ async def _post(path: str, json_body: dict) -> Any:
 
 async def whoami() -> Dict[str, Any]:
     return await _get("/user")
+
+
+# A fresh machine that never ran `git config --global user.name/email` (the common case for a
+# founder's first Windows/Dev Studio install) makes every `git commit` fail with "Please tell me
+# who you are" — reproduced live. Every real commit Dev Studio makes (git_agent.py, checkpoint_
+# service.py) resolves an identity through here instead of depending on that ambient config —
+# preferring the actual authenticated GitHub user (correct provenance) with a real fallback only
+# if that lookup itself fails, so a commit can never be blocked on missing git config.
+_FALLBACK_GIT_IDENTITY: Tuple[str, str] = ("Zanelvo Dev Studio", "devstudio@zanelvo.app")
+
+
+async def git_identity() -> Tuple[str, str]:
+    try:
+        me = await whoami()
+    except Exception:  # noqa: BLE001 — identity resolution must never block a commit
+        return _FALLBACK_GIT_IDENTITY
+    login = me.get("login")
+    if not login:
+        return _FALLBACK_GIT_IDENTITY
+    name = me.get("name") or login
+    # GitHub's own noreply format — real and tied to this actual account, not fabricated — used
+    # whenever the account has no public email (very common, and the privacy-conscious default).
+    email = me.get("email") or f"{login}@users.noreply.github.com"
+    return (name, email)
 
 
 async def list_repos(limit: int = 50) -> List[Dict[str, Any]]:

@@ -14,6 +14,7 @@ from typing import List, Optional
 
 from ...db import get_db
 from ..models import GitOperation
+from .proc_util import resolve_argv
 
 
 class GitError(Exception):
@@ -36,7 +37,7 @@ def _is_within(base: str, target: str) -> bool:
 
 async def _run(args: List[str], cwd: Optional[str], timeout: int = 120, env: Optional[dict] = None) -> CommandResult:
     proc = await asyncio.create_subprocess_exec(
-        *args, cwd=cwd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        *resolve_argv(args), cwd=cwd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         env={**os.environ, **(env or {})},
     )
     try:
@@ -153,9 +154,18 @@ class GitService:
     async def add_all(self, dest: str) -> CommandResult:
         return await _run(["git", "add", "-A"], cwd=dest, timeout=30)
 
-    async def commit(self, dest: str, message: str, allow_empty: bool = False) -> CommandResult:
+    async def commit(self, dest: str, message: str, allow_empty: bool = False,
+                       author: Optional[tuple] = None) -> CommandResult:
         await self.add_all(dest)
-        args = ["git", "commit", "-m", message]
+        args = ["git"]
+        if author:
+            # -c overrides apply to this invocation only (never touches the repo's or the
+            # machine's git config) — a fresh machine that has never run `git config --global
+            # user.name/email` would otherwise fail every commit with "Please tell me who you
+            # are", which is exactly what this exists to prevent (see git_agent.py's caller).
+            name, email = author
+            args += ["-c", f"user.name={name}", "-c", f"user.email={email}"]
+        args += ["commit", "-m", message]
         if allow_empty:
             args.append("--allow-empty")
         before = None

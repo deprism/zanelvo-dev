@@ -17,6 +17,8 @@ import time
 from dataclasses import dataclass
 from typing import List, Optional
 
+from .proc_util import resolve_argv
+
 _processes: dict = {}  # task_id -> asyncio subprocess
 
 
@@ -107,7 +109,7 @@ async def start_live_local(task_id: str, workspace_path: str,
                              detail=f"No 'dev' or 'start' script found in {cwd}/package.json")
     try:
         proc = await asyncio.create_subprocess_exec(
-            *args, cwd=cwd,
+            *resolve_argv(args), cwd=cwd,
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
             env={**os.environ, "PORT": str(port), "BROWSER": "none"},
             start_new_session=True,  # own process group — see _kill_process_group

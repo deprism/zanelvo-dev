@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 from typing import Dict, List, Optional
+
+_IS_WINDOWS = sys.platform.startswith("win")
 
 _ROUTE_HINTS = {
     "auth": ["auth", "login", "session", "jwt", "permission", "role"],
@@ -108,7 +111,10 @@ def discover(workspace_path: str) -> TestingProfile:
     # Maven (pom.xml) or Gradle (build.gradle[.kts]) — the two build systems virtually every JVM
     # project (including Bukkit/Spigot/Paper Minecraft plugins) uses. Prefers the project's own
     # wrapper script (./mvnw, ./gradlew) when present — it pins an exact, known-working build-tool
-    # version, so it's more reliable than whatever "mvn"/"gradle" happens to be on PATH.
+    # version, so it's more reliable than whatever "mvn"/"gradle" happens to be on PATH. On Windows
+    # the wrapper is a DIFFERENT file (mvnw.cmd/gradlew.bat, not the Unix mvnw/gradlew shell
+    # script a real Maven/Gradle wrapper also ships) — picking the Unix one there would try to run
+    # a "#!/bin/sh" script directly, which Windows can't execute at all.
     java_dirs = _find_candidate_dirs(
         workspace_path, ["pom.xml", "build.gradle", "build.gradle.kts"], ["", "plugin"])
     if java_dirs:
@@ -117,11 +123,13 @@ def discover(workspace_path: str) -> TestingProfile:
         profile.has_java = True
         profile.java_dir = java_dir
         if os.path.isfile(os.path.join(jdir, "pom.xml")):
-            mvn = "./mvnw" if os.path.isfile(os.path.join(jdir, "mvnw")) else "mvn"
+            mvnw_name = "mvnw.cmd" if _IS_WINDOWS else "mvnw"
+            mvn = f"./{mvnw_name}" if os.path.isfile(os.path.join(jdir, mvnw_name)) else "mvn"
             profile.java_build_cmd = f"{mvn} -B package"
             profile.java_test_cmd = f"{mvn} -B test"
         else:
-            gradle = "./gradlew" if os.path.isfile(os.path.join(jdir, "gradlew")) else "gradle"
+            gradlew_name = "gradlew.bat" if _IS_WINDOWS else "gradlew"
+            gradle = f"./{gradlew_name}" if os.path.isfile(os.path.join(jdir, gradlew_name)) else "gradle"
             profile.java_build_cmd = f"{gradle} build"
             profile.java_test_cmd = f"{gradle} test"
 

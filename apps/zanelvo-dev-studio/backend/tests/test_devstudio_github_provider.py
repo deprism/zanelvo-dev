@@ -8,6 +8,36 @@ import asyncio
 from app.devstudio.services import github_provider
 
 
+def test_git_identity_uses_the_real_authenticated_user(monkeypatch):
+    async def fake_whoami():
+        return {"login": "octocat", "name": "The Octocat", "email": "octocat@example.com"}
+
+    monkeypatch.setattr(github_provider, "whoami", fake_whoami)
+    identity = asyncio.run(github_provider.git_identity())
+    assert identity == ("The Octocat", "octocat@example.com")
+
+
+def test_git_identity_uses_github_noreply_email_when_account_has_no_public_email(monkeypatch):
+    async def fake_whoami():
+        return {"login": "octocat", "name": None, "email": None}
+
+    monkeypatch.setattr(github_provider, "whoami", fake_whoami)
+    identity = asyncio.run(github_provider.git_identity())
+    assert identity == ("octocat", "octocat@users.noreply.github.com")
+
+
+def test_git_identity_falls_back_to_a_real_default_when_whoami_fails(monkeypatch):
+    # Regression test: this is the actual fix for "Please tell me who you are" on a fresh machine
+    # with no git config — the fallback must always be a usable, non-empty identity, never None.
+    async def fake_whoami():
+        raise github_provider.GitHubNotConfigured("no token")
+
+    monkeypatch.setattr(github_provider, "whoami", fake_whoami)
+    identity = asyncio.run(github_provider.git_identity())
+    assert identity == ("Zanelvo Dev Studio", "devstudio@zanelvo.app")
+    assert all(identity)
+
+
 def test_create_repo_sends_the_right_request_body(monkeypatch):
     captured = {}
 

@@ -11,7 +11,8 @@ from ..services.git_service import GitService
 
 async def commit(task: Task, workspace: Workspace, message: str) -> str:
     git = GitService(task_id=task.id)
-    await git.commit(workspace.local_path, message)
+    identity = await github_provider.git_identity()
+    await git.commit(workspace.local_path, message, author=identity)
     return await git.current_sha(workspace.local_path)
 
 

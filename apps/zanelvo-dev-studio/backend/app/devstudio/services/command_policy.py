@@ -25,7 +25,10 @@ ALLOWED_PREFIXES: List[List[str]] = [
     ["npx", "playwright"], ["npx", "tsc"],
     ["git", "status"], ["git", "diff"], ["git", "log"],
     # --- JVM builds (Java/Kotlin projects — e.g. Bukkit/Spigot/Paper Minecraft plugins) ---
-    ["mvn"], ["./mvnw"], ["gradle"], ["./gradlew"], ["javac"], ["java"], ["jar"],
+    # .cmd/.bat entries are the Windows wrapper scripts (see testing_service.py's platform check —
+    # ./mvnw/./gradlew are Unix shell scripts that don't run on Windows at all).
+    ["mvn"], ["./mvnw"], ["./mvnw.cmd"], ["gradle"], ["./gradlew"], ["./gradlew.bat"],
+    ["javac"], ["java"], ["jar"],
     # --- archiving (build artifacts, general packaging) ---
     ["zip"], ["unzip"], ["tar"],
 ]
