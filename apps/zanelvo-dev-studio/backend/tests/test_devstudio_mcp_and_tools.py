@@ -61,11 +61,43 @@ def test_get_assets_tool_is_honestly_not_implemented():
         asyncio.run(_run_builtin_tool("get_assets", {"query": "logo"}, task_id="t1", role="design"))
 
 
-def test_web_search_tool_explains_it_needs_an_anthropic_model():
+def test_web_search_tool_explains_the_gap_when_no_perplexity_key_is_configured(monkeypatch):
     # Only reached for non-Anthropic providers — AnthropicProvider intercepts "web_search" before
-    # it would ever become a tool call needing this executor (see anthropic_provider.py).
+    # it would ever become a tool call needing this executor (see anthropic_provider.py). Without a
+    # Perplexity key configured as a fallback, it should explain the actual gap, not silently fail.
+    from app.devstudio.services import settings_service
+
+    async def fake_get_secret(name):
+        assert name == "perplexity_api_key"
+        return None
+
+    monkeypatch.setattr(settings_service, "get_secret", fake_get_secret)
     with pytest.raises(ToolExecutionError, match="Anthropic"):
         asyncio.run(_run_builtin_tool("web_search", {"query": "x"}, task_id="t1", role="planner"))
+
+
+def test_web_search_tool_uses_a_configured_perplexity_key_for_non_anthropic_providers(monkeypatch):
+    # This is the fix for "web_search shouldn't require only an Anthropic key" — a configured
+    # Perplexity key makes it work for any provider whose tool-calling loop is supported (Emergent
+    # today), not just Anthropic's own server-hosted search.
+    from app.devstudio.services import perplexity_service, settings_service
+
+    async def fake_get_secret(name):
+        return "pplx-fake-key"
+
+    captured = {}
+
+    async def fake_research(query, api_key):
+        captured.update(query=query, api_key=api_key)
+        return "Real, cited web research result."
+
+    monkeypatch.setattr(settings_service, "get_secret", fake_get_secret)
+    monkeypatch.setattr(perplexity_service, "research", fake_research)
+
+    result = asyncio.run(_run_builtin_tool("web_search", {"query": "latest Paper API changes"},
+                                             task_id="t1", role="planner"))
+    assert result == "Real, cited web research result."
+    assert captured == {"query": "latest Paper API changes", "api_key": "pplx-fake-key"}
 
 
 def test_unknown_builtin_tool_raises():

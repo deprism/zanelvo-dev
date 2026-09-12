@@ -184,9 +184,11 @@ BUILTIN_TOOLS: Dict[str, Dict[str, Any]] = {
     },
     "web_search": {
         "name": "web_search",
-        "description": "Search the public web for current information. Only available when this "
-                        "role's primary model is Anthropic — routed to Claude's own server-hosted "
-                        "web search, not a separate search API this app calls itself.",
+        "description": "Search the public web for current information. When this role's primary "
+                        "model is Anthropic, this routes to Claude's own server-hosted web search "
+                        "directly. For any other provider whose tool-calling loop is supported "
+                        "(currently Emergent), it uses a configured Perplexity API key instead — "
+                        "not locked to one specific model provider.",
         "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}},
                           "required": ["query"]},
     },
@@ -289,11 +291,18 @@ async def _run_builtin_tool(name: str, arguments: Dict[str, Any], *, task_id: st
         # Real Anthropic-hosted search is wired directly into AnthropicProvider.generate_with_tools
         # (mapped to Claude's own server-hosted search tool there, resolved within that one API
         # call — never routed through this executor) when the calling role's model is Anthropic.
-        # Any other provider has no search backend configured, so say so rather than fabricate.
+        # This executor is only ever reached for a NON-Anthropic provider (Emergent is the only
+        # other one that implements the tool-calling loop today) — for those, fall back to a real
+        # configured Perplexity key rather than hard-requiring Anthropic specifically.
+        from ..services import perplexity_service, settings_service
+        api_key = await settings_service.get_secret("perplexity_api_key")
+        if api_key:
+            return await perplexity_service.research(str(arguments.get("query", "")), api_key)
         raise ToolExecutionError(
-            "web_search has no independent search backend configured in this build — it only "
-            "works when this role's primary model is Anthropic (server-hosted search). Configure "
-            "a real search MCP server instead for other providers."
+            "web_search has no search backend available for this role's provider: it isn't "
+            "Anthropic (server-hosted search), and no Perplexity API key is configured as a "
+            "fallback. Add one in Settings > Secrets (Tools group), or configure a real search "
+            "MCP server instead."
         )
     if name == "screenshot":
         from ..services import browser_service
