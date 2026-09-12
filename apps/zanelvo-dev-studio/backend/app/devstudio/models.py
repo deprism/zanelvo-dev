@@ -406,6 +406,16 @@ class CreateProjectRequest(BaseModel):
     description: Optional[str] = None
 
 
+class CreateRepoAndProjectRequest(BaseModel):
+    """A brand-new GitHub repository, not a connection to an existing one (see
+    CreateProjectRequest for that) — repo_name is the actual github.com repo name (letters,
+    digits, ., -, _), which name (the Dev Studio Project display name) may differ from."""
+    repo_name: str
+    private: bool = True
+    description: Optional[str] = None
+    name: Optional[str] = None
+
+
 class CreateTaskRequest(BaseModel):
     project_id: str
     branch: str

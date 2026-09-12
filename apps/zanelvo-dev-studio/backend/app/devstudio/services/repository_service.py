@@ -7,11 +7,26 @@ from typing import List, Optional
 from bson import ObjectId
 
 from ...db import get_db
-from ..models import CreateProjectRequest, Project
+from ..models import CreateProjectRequest, CreateRepoAndProjectRequest, Project
 from . import github_provider
 from .file_service import FileService
 from .git_service import GitService
 from .workspace_manager import ensure_browse_checkout
+
+
+async def create_new_repo_and_project(req: CreateRepoAndProjectRequest) -> Project:
+    """Creates a brand-new GitHub repository (not a connection to an existing one — see
+    create_project below for that) and immediately turns it into a Dev Studio Project, so a
+    founder starting from nothing never has to leave Dev Studio to first go create the repo by
+    hand on github.com. Reuses create_project for the actual Project bookkeeping so both paths
+    stay in sync."""
+    repo_meta = await github_provider.create_repo(
+        req.repo_name, private=req.private, description=req.description)
+    return await create_project(CreateProjectRequest(
+        github_owner=repo_meta["owner"], github_repo=repo_meta["repo"],
+        default_branch=repo_meta["default_branch"], name=req.name or repo_meta["full_name"],
+        description=req.description,
+    ))
 
 
 async def create_project(req: CreateProjectRequest) -> Project:

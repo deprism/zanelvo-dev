@@ -14,6 +14,7 @@ export const devstudio = {
   githubBranches: (owner: string, repo: string) => api.get(`${base}/github/${owner}/${repo}/branches`),
 
   createProject: (body: Record<string, unknown>) => api.post(`${base}/projects`, body),
+  createRepoAndProject: (body: Record<string, unknown>) => api.post(`${base}/projects/new-repo`, body),
   listProjects: () => api.get(`${base}/projects`),
   getProject: (id: string) => api.get(`${base}/projects/${id}`),
   projectBranches: (id: string) => api.get(`${base}/projects/${id}/branches`),

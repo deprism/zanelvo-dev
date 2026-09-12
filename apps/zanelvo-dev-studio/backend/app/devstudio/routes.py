@@ -12,8 +12,8 @@ from starlette.responses import Response, StreamingResponse
 
 from .agents import git_agent, orchestrator, qa_agent, runner
 from .agents import registry as agent_registry
-from .models import (AgentRole, CreateProjectRequest, CreateTaskRequest, MemoryCategory,
-                       ModelPreset, TaskMessageRequest, TaskUpdateRequest)
+from .models import (AgentRole, CreateProjectRequest, CreateRepoAndProjectRequest, CreateTaskRequest,
+                       MemoryCategory, ModelPreset, TaskMessageRequest, TaskUpdateRequest)
 from .providers import registry as provider_registry
 from .security import require_devstudio_access, require_devstudio_write
 from .services import (activity_service, browser_service, checkpoint_service, custom_agent_service,
@@ -239,6 +239,15 @@ async def github_branches(owner: str, repo: str, user: str = Depends(require_dev
 @router.post("/projects")
 async def create_project(body: CreateProjectRequest, user: str = Depends(require_devstudio_write)):
     project = await repository_service.create_project(body)
+    return project.model_dump()
+
+
+@router.post("/projects/new-repo")
+async def create_new_repo_and_project(body: CreateRepoAndProjectRequest,
+                                        user: str = Depends(require_devstudio_write)):
+    """Creates a brand-new GitHub repository (under the authenticated user's own account) and
+    turns it into a Dev Studio Project in one step — no separate trip to github.com first."""
+    project = await repository_service.create_new_repo_and_project(body)
     return project.model_dump()
 
 

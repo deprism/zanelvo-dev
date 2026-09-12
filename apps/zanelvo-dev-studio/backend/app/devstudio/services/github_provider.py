@@ -72,6 +72,22 @@ async def list_repos(limit: int = 50) -> List[Dict[str, Any]]:
               "updated_at": r["updated_at"]} for r in data]
 
 
+async def create_repo(name: str, *, private: bool = True, description: Optional[str] = None,
+                       auto_init: bool = True) -> Dict[str, Any]:
+    """Creates a brand-new repository under the authenticated user's own account (POST /user/repos
+    — org-owned creation would need a different endpoint/scope, out of scope here). `auto_init`
+    defaults to True: an uninitialized repo has no commits/branches at all, which every other
+    piece of this app (default_branch resolution, cloning, indexing) assumes exists — a repo
+    that's usable the instant it's created, not an empty shell the founder has to fix first."""
+    body: Dict[str, Any] = {"name": name, "private": private, "auto_init": auto_init}
+    if description:
+        body["description"] = description
+    data = await _post("/user/repos", body)
+    return {"owner": data["owner"]["login"], "repo": data["name"], "full_name": data["full_name"],
+             "private": data["private"], "default_branch": data.get("default_branch") or "main",
+             "html_url": data["html_url"]}
+
+
 async def get_repo(owner: str, repo: str) -> Dict[str, Any]:
     r = await _get(f"/repos/{owner}/{repo}")
     return {"owner": owner, "repo": repo, "default_branch": r["default_branch"],
