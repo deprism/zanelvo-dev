@@ -34,7 +34,7 @@ def _is_within(base: str, target: str) -> bool:
     return target == base or target.startswith(base + os.sep)
 
 
-async def _run(args: List[str], cwd: str, timeout: int = 120, env: Optional[dict] = None) -> CommandResult:
+async def _run(args: List[str], cwd: Optional[str], timeout: int = 120, env: Optional[dict] = None) -> CommandResult:
     proc = await asyncio.create_subprocess_exec(
         *args, cwd=cwd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         env={**os.environ, **(env or {})},
@@ -187,7 +187,12 @@ class GitService:
 
     async def remote_head_sha(self, remote_or_path: str, branch: str) -> Optional[str]:
         assert_safe_ref(branch)
-        res = await _run(["git", "ls-remote", remote_or_path, f"refs/heads/{branch}"], cwd="/tmp", timeout=30)
+        # `git ls-remote` needs no particular working directory (every argument here is already an
+        # absolute path/URL) — cwd=None (inherit the running process's cwd) instead of a hardcoded
+        # "/tmp" avoids assuming a Unix-style temp directory exists, which it does not on the
+        # Windows desktop build (NotADirectoryError: [WinError 267] the first time any task tried
+        # to provision a workspace, since this is called from provision_task_workspace).
+        res = await _run(["git", "ls-remote", remote_or_path, f"refs/heads/{branch}"], cwd=None, timeout=30)
         if not res.ok or not res.stdout.strip():
             return None
         return res.stdout.split()[0]

@@ -145,3 +145,21 @@ def test_kill_process_group_kills_grandchildren_too(tmp_path):
             "grandchild should be dead too — not just the direct child"
 
     asyncio.run(scenario())
+
+
+def test_kill_process_group_falls_back_on_windows_where_killpg_does_not_exist(monkeypatch):
+    # Regression test: os.killpg raises AttributeError on Windows (it doesn't exist there at all,
+    # unlike the ProcessLookupError/PermissionError/OSError this function already handled) — the
+    # desktop app runs this backend directly on a founder's Windows machine, so an uncaught
+    # AttributeError here would crash stop_live_local outright instead of falling back to
+    # proc.kill().
+    monkeypatch.delattr(os, "killpg", raising=False)
+    killed = {"called": False}
+
+    class _FakeProc:
+        pid = 12345
+        def kill(self):
+            killed["called"] = True
+
+    _kill_process_group(_FakeProc())
+    assert killed["called"], "expected proc.kill() fallback when os.killpg is unavailable"

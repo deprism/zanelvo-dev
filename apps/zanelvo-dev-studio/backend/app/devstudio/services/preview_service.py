@@ -27,10 +27,16 @@ def _kill_process_group(proc: "asyncio.subprocess.Process") -> None:
     orphaned `vite` process on every single call, not just occasionally). The process is started
     in its own session (see start_new_session=True below) specifically so its pid doubles as its
     process-group id, letting us kill the whole tree with one signal."""
+    # os.killpg doesn't exist at all on Windows (AttributeError, not OSError) — the desktop app
+    # runs this backend directly on the founder's Windows machine, not just a Linux server, so this
+    # can't be a POSIX-only best-effort call.
+    if not hasattr(os, "killpg"):
+        proc.kill()
+        return
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError, OSError):
-        proc.kill()  # process group already gone, or platform doesn't support killpg — best effort
+        proc.kill()  # process group already gone — best effort
 
 
 @dataclass
