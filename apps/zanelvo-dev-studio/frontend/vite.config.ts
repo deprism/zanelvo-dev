@@ -8,7 +8,9 @@ export default defineConfig({
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },
   server: {
-    port: 5173,
+    host: true,
+    port: Number(process.env.PORT) || 5173,
+    allowedHosts: true,
     proxy: {
       "/api": {
         target: process.env.VITE_BACKEND_URL || "http://localhost:8000",

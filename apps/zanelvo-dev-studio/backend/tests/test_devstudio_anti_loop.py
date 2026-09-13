@@ -4,9 +4,9 @@ from app.devstudio.services import anti_loop
 
 
 def test_normalize_strips_timestamps_uuids_paths_and_numbers():
-    raw_a = ("2025-01-01T10:00:00.123Z ERROR request_id=550e8400-e29b-41d4-a716-446655440000 "
+    raw_a = ("2025-01-01T10:00:00.123Z ERROR request_id=zanelvo-agent-lab "
              "at /tmp/pytest-of-root/pytest-42/test0/file.py:17:3 connection refused on port 54231")
-    raw_b = ("2026-09-10T22:11:05Z ERROR request_id=123e4567-e89b-12d3-a456-426614174000 "
+    raw_b = ("2026-09-10T22:11:05Z ERROR request_id=zanelvo-agent-lab "
              "at /tmp/pytest-of-root/pytest-99/test5/file.py:88:9 connection refused on port 61234")
     assert anti_loop.normalize_error(raw_a) == anti_loop.normalize_error(raw_b)
 

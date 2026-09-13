@@ -2,6 +2,7 @@
 test_devstudio_registry.py (no DB, no live provider calls). Live round-trips are covered separately
 by tests/manual_emergent_live.py, which needs a real Universal Key + network."""
 import asyncio
+import builtins
 
 import pytest
 
@@ -39,12 +40,25 @@ def test_capabilities_are_reported_from_catalog_not_faked():
     assert p.supports_vision("not-a-real-model") is False
 
 
-def test_missing_sdk_error_points_to_the_correct_requirements_file():
+def test_missing_sdk_error_points_to_the_correct_requirements_file(monkeypatch):
     # Regression test: this error message used to (wrongly) tell founders to
     # `pip install -r requirements-devstudio.txt`, which deliberately does NOT include
     # emergentintegrations (see that file's own header — it conflicts with the native OpenAI
-    # provider's pinned version) and so could never actually fix the problem. Only reached when
-    # emergentintegrations genuinely isn't installed, which is the case in this test environment.
+    # provider's pinned version) and so could never actually fix the problem.
+    #
+    # This must assert the same message whether or not emergentintegrations happens to be installed
+    # in the runtime executing the tests (it IS installed when the Emergent Universal Key path is
+    # actually in use). So force the ImportError path deterministically rather than depending on the
+    # ambient install state.
+    real_import = builtins.__import__
+
+    def _fail_for_emergent(name, *args, **kwargs):
+        if name == "litellm" or name.startswith("emergentintegrations"):
+            raise ImportError(f"No module named {name!r}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _fail_for_emergent)
+
     with pytest.raises(ProviderNotConfigured) as exc_info:
         _sdk()
     message = str(exc_info.value)
