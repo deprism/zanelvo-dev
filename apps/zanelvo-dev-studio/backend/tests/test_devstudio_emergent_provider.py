@@ -87,6 +87,25 @@ def test_error_normalization_maps_known_categories():
     assert _normalize_error(Exception("some weird upstream blip")).code == "PROVIDER_ERROR"
 
 
+def test_error_normalization_gives_the_real_fix_for_free_tier_external_access():
+    # Regression test — reproduced live against Emergent's actual API with a real founder key that
+    # WAS valid and DID have balance: a free-tier Universal Key is rejected for any use outside
+    # Emergent's own platform (Emergent's own error code: FREE_USER_EXTERNAL_ACCESS_DENIED). The
+    # generic "verify your key" message is actively misleading here, so this case must be detected
+    # before the generic auth-rejected bucket and given its own, accurate message.
+    real_error_text = (
+        "litellm.APIError: APIError: OpenAIException - Error code: 403 - {'error': 'access_denied', "
+        "'message': 'Free users can only use Universal Key from within Emergent platform. Please "
+        "upgrade to paid plan for external access.', 'code': 'FREE_USER_EXTERNAL_ACCESS_DENIED', "
+        "'upgrade_url': 'https://app.emergentagent.com/settings/billing'}"
+    )
+    err = _normalize_error(Exception(real_error_text))
+    assert isinstance(err, ProviderNotConfigured)
+    assert "plan-tier" in str(err)
+    assert "billing" in str(err)
+    assert "not an invalid key" in str(err)
+
+
 def test_error_normalization_detects_insufficient_credit():
     for msg in ("insufficient balance", "402 Payment Required", "out of credit",
                 "storage_quota_exceeded budget", "billing issue"):

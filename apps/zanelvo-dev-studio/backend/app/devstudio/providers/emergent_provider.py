@@ -118,6 +118,20 @@ def _normalize_error(exc: Exception) -> Exception:
     leaking the Universal Key or other secret material. Returns the exception to raise."""
     msg = str(exc)
     low = msg.lower()
+    # A real, confirmed case (reproduced live against Emergent's own API with a founder's actual
+    # key): a free-tier Universal Key is REJECTED for any use outside Emergent's own platform,
+    # regardless of validity or balance — Emergent's own error code is
+    # FREE_USER_EXTERNAL_ACCESS_DENIED. The generic "verify your key" message below is actively
+    # misleading for this case (the key IS valid), so it's checked first and given its own,
+    # accurate message pointing at the actual fix.
+    if "external_access_denied" in low or "external access" in low or "within emergent platform" in low:
+        return ProviderNotConfigured(
+            "Emergent rejected this Universal Key for external/API access — this is a plan-tier "
+            "restriction, not an invalid key: free-tier Universal Keys only work from inside "
+            "Emergent's own platform. Upgrade to a paid plan for external access "
+            "(https://app.emergentagent.com/settings/billing), or use a different provider (Anthropic/"
+            "OpenAI/Gemini/Bedrock) with its own directly-issued API key instead."
+        )
     # Auth/credential problems are classified as 'requires_credentials' by the runner.
     if any(k in low for k in ("api key", "api_key", "unauthorized", "authentication",
                               "invalid key", "forbidden", "401", "403")):
