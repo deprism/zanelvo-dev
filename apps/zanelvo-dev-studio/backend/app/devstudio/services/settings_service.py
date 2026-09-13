@@ -41,9 +41,14 @@ async def set_secret(name: str, value: str) -> None:
     if name not in _SECRET_KEYS:
         raise ValueError(f"Unknown secret: {name}")
     db = get_db()
+    # A pasted key/token routinely carries an invisible leading/trailing newline or space (a
+    # dashboard's copy button, a text file, a browser line-select) — invisible to the founder, but
+    # sent byte-for-byte as the credential, so the provider legitimately rejects a "valid" key.
+    # No secret this app stores is ever meant to have leading/trailing whitespace, so stripping is
+    # always safe.
     await db.ds_secrets.update_one(
         {"key": "singleton"},
-        {"$set": {f"{name}_enc": secretbox.encrypt(value), "updated_at": utc_now_iso()}},
+        {"$set": {f"{name}_enc": secretbox.encrypt(value.strip()), "updated_at": utc_now_iso()}},
         upsert=True,
     )
 
@@ -71,7 +76,7 @@ async def get_secret(name: str) -> Optional[str]:
         "gcp_service_account_json": "GOOGLE_APPLICATION_CREDENTIALS_JSON",
         "perplexity_api_key": "PERPLEXITY_API_KEY",
     }
-    env_val = os.environ.get(env_map.get(name, ""), "")
+    env_val = os.environ.get(env_map.get(name, ""), "").strip()
     if env_val:
         return env_val
     db = get_db()
@@ -79,7 +84,12 @@ async def get_secret(name: str) -> Optional[str]:
     if not doc:
         return None
     enc = doc.get(f"{name}_enc")
-    return secretbox.decrypt(enc) if enc else None
+    if not enc:
+        return None
+    # .strip() here too (not just in set_secret) so a secret saved before this fix self-heals on
+    # next read, rather than requiring the founder to re-paste a key that already "looked right".
+    decrypted = secretbox.decrypt(enc)
+    return decrypted.strip() if decrypted else decrypted
 
 
 async def secrets_status() -> Dict[str, bool]:

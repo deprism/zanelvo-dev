@@ -1067,7 +1067,10 @@ export function SettingsPanel() {
   }, []);
 
   async function saveSecret(name: string) {
-    const value = draft[name];
+    // A pasted key/token routinely carries an invisible leading/trailing newline or space (a
+    // dashboard's copy button, a text file, a browser line-select) — trim it here so what gets
+    // saved matches what the founder can actually see, not an invisible corrupted byte or two.
+    const value = draft[name]?.trim();
     if (!value) return;
     await devstudio.setSecret(name, value);
     toast.success("Saved. It is encrypted at rest and never shown again.");
