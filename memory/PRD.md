@@ -61,3 +61,27 @@ commit→push flow end-to-end against a real repo, and harden what's broken.
   real browser QA scenario is needed).
 - P2: add native ANTHROPIC/OPENAI/GEMINI keys when available and re-test provider Test buttons +
   automatic fallback ordering.
+
+## Website+game bug fixes (2026-09-13, verified via real runs)
+Reported: "website with a game" ran, agents "succeeded" but diff empty → REJECTED loop; also wanted
+live preview, a working/stop composer button, and a far more informative activity log.
+Root causes fixed (all in apps/zanelvo-dev-studio):
+- Orchestrator only implemented the FIRST dependency layer then reviewed → empty/partial diff.
+  `_implement_loop` now runs pass-after-pass until no item is runnable (multi-pass).
+- `git diff` ignores untracked files → a from-scratch site (all new files) showed 0 changes.
+  `get_diff_summary` now `git add -N` (intent-to-add) first. THIS was the real "no file changes" bug.
+- BLOCKED/FAILED/CANCELLED tasks couldn't resume (run_task had no code path) → /run was a no-op.
+  run_task now resumes from the furthest stage reached.
+- MAX_QUALITY(all tools) forced structured roles through the tool loop → prose instead of JSON, and
+  QA items hit the 6-call loop limit. Added: strict JSON-only tool-loop system prompt, a JSON
+  recovery call, and a loop-limit salvage (final no-tool structured call) instead of hard-fail.
+- New browser-reachable static-site preview: GET /tasks/{id}/preview/static-info + /preview/serve/{path}
+  serve the workspace's index.html/assets over :8001; Preview tab iframes it (LIVE_LOCAL's random
+  localhost port isn't reachable through the ingress). find_static_root detects the site root.
+- Activity log enriched: analysis_complete, item_implemented (summary + files), agent_finished
+  carries the model's own summary, tool_call carries args + result snippet. Composer send button
+  becomes a spinner + inline Stop while agents work; nothing is cleared.
+Live result: task "Website with a little game" → APPROVED, 4 files (+516), static preview serves the
+Memory Match game (correct content-types). Tests: 200 passing; ruff clean.
+NOTE: testing_agent verification was SKIPPED at the user's explicit request (low on credits) —
+verification was done via real end-to-end runs + curl instead.

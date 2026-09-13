@@ -103,6 +103,15 @@ class FileService:
         with open(full, "rb") as fh:
             return file_hash(fh.read())
 
+    def read_bytes(self, rel_path: str, max_bytes: int = 25_000_000) -> bytes:
+        """Raw bytes of a workspace file (path-safe), for serving a live static preview — unlike
+        read_file this doesn't refuse binaries (images/fonts a site needs) or decode as text."""
+        full = _resolve(self.root, rel_path)
+        if not os.path.isfile(full):
+            raise FileNotFoundError(rel_path)
+        with open(full, "rb") as fh:
+            return fh.read(max_bytes)
+
     def search_repo(self, query: str, glob: Optional[str] = None, max_results: int = 200) -> List[dict]:
         results = []
         query_lower = query.lower()

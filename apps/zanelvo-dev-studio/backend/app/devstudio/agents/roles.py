@@ -36,7 +36,12 @@ _PLANNER_SYSTEM_TEMPLATE = (
     "depends_on MUST be the exact title string of another item in this same plan that must "
     "complete first — never an index number or id. "
     "Every item MUST have concrete, testable acceptance_criteria and a verification_method "
-    "(e.g. 'pytest backend/tests/test_x.py', 'manual: click X, expect Y')."
+    "(e.g. 'pytest backend/tests/test_x.py', 'manual: click X, expect Y'). "
+    "Every item MUST result in concrete file changes (create or modify real files) — never a "
+    "purely conceptual 'define/plan/design' item that writes nothing. When the request is to build "
+    "a small website or game and the repo has no existing build tooling, PREFER a self-contained "
+    "static site at the repository root (index.html + styles.css + a vanilla-JS script) that runs "
+    "with no build step and no dependencies, so it can be previewed instantly."
 )
 
 _IMPLEMENTER_SYSTEMS = {
@@ -69,7 +74,10 @@ IMPLEMENTER_JSON_CONTRACT = (
     "}]}. Each patch's `find` must be copied EXACTLY from the file content you were given — do not "
     "paraphrase it. Prefer 'patch' over 'replace' for existing files so unrelated lines are "
     "untouched. Never invent file contents you were not shown; request them via relevant_files in "
-    "an earlier step if you need more context."
+    "an earlier step if you need more context. Always produce at least one file operation — if the "
+    "item reads as conceptual, still express it as concrete edits (e.g. scaffold index.html). For "
+    "web output use RELATIVE asset paths ('./styles.css', './game.js'), never absolute ('/x.css'), "
+    "so the site works when served from a subpath preview."
 )
 
 REVIEWER_SYSTEM = (

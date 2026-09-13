@@ -720,6 +720,48 @@ async def preview_screenshot(task_id: str, user: str = Depends(require_devstudio
     return state.__dict__
 
 
+@router.get("/tasks/{task_id}/preview/static-info")
+async def preview_static_info(task_id: str, user: str = Depends(require_devstudio_access)):
+    """Whether this task's workspace contains a self-contained static site (an index.html) that can
+    be served and iframed directly — the browser-reachable preview path in this hosted setup."""
+    ws = await workspace_manager.get_workspace_for_task(task_id)
+    if not ws:
+        return {"available": False, "detail": "No workspace yet — run the task first."}
+    base = preview_service.find_static_root(ws.local_path)
+    return {"available": base is not None, "base": base}
+
+
+@router.get("/tasks/{task_id}/preview/serve")
+@router.get("/tasks/{task_id}/preview/serve/{path:path}")
+async def preview_serve(task_id: str, path: str = "", user: str = Depends(require_devstudio_access)):
+    """Serve a file from this task's static site (path-safe), so the Preview tab can iframe it over
+    the same origin. Unknown paths fall back to index.html (SPA-style)."""
+    import mimetypes
+
+    from .services.file_service import PathEscapeError
+
+    ws = await _require_workspace(task_id)
+    base = preview_service.find_static_root(ws.local_path)
+    if base is None:
+        raise HTTPException(404, "No static site (index.html) found in this workspace")
+    rel = path or "index.html"
+    if rel.endswith("/"):
+        rel = rel + "index.html"
+    fs = FileService(ws.local_path)
+    served = os.path.join(base, rel) if base else rel
+    try:
+        data = fs.read_bytes(served)
+    except (FileNotFoundError, PathEscapeError):
+        index_rel = os.path.join(base, "index.html") if base else "index.html"
+        try:
+            data = fs.read_bytes(index_rel)
+            rel = "index.html"
+        except (FileNotFoundError, PathEscapeError):
+            raise HTTPException(404, f"Not found: {path}")
+    ctype = mimetypes.guess_type(rel)[0] or "application/octet-stream"
+    return Response(content=data, media_type=ctype)
+
+
 @router.get("/tasks/{task_id}/checkpoints")
 async def list_checkpoints(task_id: str, user: str = Depends(require_devstudio_access)):
     await _require_task(task_id)

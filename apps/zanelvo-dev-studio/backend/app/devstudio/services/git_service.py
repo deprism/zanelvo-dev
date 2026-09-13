@@ -154,6 +154,14 @@ class GitService:
     async def add_all(self, dest: str) -> CommandResult:
         return await _run(["git", "add", "-A"], cwd=dest, timeout=30)
 
+    async def add_intent(self, dest: str) -> CommandResult:
+        """`git add -N .` — records new (untracked) files as "intent to add" so they show up in
+        `git diff` as additions. Without this, a task that CREATES files (the whole-new-website
+        case) produces an empty diff, because plain `git diff` only reports changes to already-
+        tracked files. Non-destructive: it stages intent only, not content, so a later
+        add_all + commit is unaffected."""
+        return await _run(["git", "add", "-N", "."], cwd=dest, timeout=30)
+
     async def commit(self, dest: str, message: str, allow_empty: bool = False,
                        author: Optional[tuple] = None) -> CommandResult:
         await self.add_all(dest)

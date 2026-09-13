@@ -72,5 +72,8 @@ def parse_unified_diff(raw: str) -> DiffSummary:
 
 async def get_diff_summary(workspace_local_path: str, base_ref: str) -> DiffSummary:
     git = GitService()
+    # Mark untracked files intent-to-add first, so newly CREATED files (a from-scratch site is all
+    # new files) appear in the diff instead of being silently invisible to `git diff`.
+    await git.add_intent(workspace_local_path)
     raw = await git.diff(workspace_local_path, base_ref=base_ref)
     return parse_unified_diff(raw)

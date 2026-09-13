@@ -163,3 +163,24 @@ def test_kill_process_group_falls_back_on_windows_where_killpg_does_not_exist(mo
 
     _kill_process_group(_FakeProc())
     assert killed["called"], "expected proc.kill() fallback when os.killpg is unavailable"
+
+
+# --- static-site preview root detection (added with the browser-reachable static preview) -----
+
+def test_find_static_root_none_when_no_index(tmp_path):
+    from app.devstudio.services import preview_service
+    assert preview_service.find_static_root(str(tmp_path)) is None
+
+
+def test_find_static_root_prefers_repo_root(tmp_path):
+    from app.devstudio.services import preview_service
+    (tmp_path / "index.html").write_text("<h1>hi</h1>")
+    assert preview_service.find_static_root(str(tmp_path)) == ""
+
+
+def test_find_static_root_detects_common_subdir(tmp_path):
+    from app.devstudio.services import preview_service
+    pub = tmp_path / "public"
+    pub.mkdir()
+    (pub / "index.html").write_text("<h1>hi</h1>")
+    assert preview_service.find_static_root(str(tmp_path)) == "public"

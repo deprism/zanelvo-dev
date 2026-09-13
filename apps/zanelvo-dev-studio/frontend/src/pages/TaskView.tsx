@@ -15,6 +15,13 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/Tabs";
 import type { Task, DiffSummary, PlanItem, TestRun } from "@/lib/types";
 import { CheckpointsPanel, PreviewPanel } from "./task-extra-panels";
 
+// Statuses where the Supervisor/agents are actively working — used to flip the composer into a
+// "working… (Stop)" state and to spin the Run button, so a long run never looks silently stuck.
+const RUNNING_STATES = new Set([
+  "UNDERSTANDING", "ANALYZING_REPOSITORY", "PLANNING", "READY", "IMPLEMENTING", "DEBUGGING",
+  "TESTING", "REVIEWING", "FINAL_VERIFICATION", "COMMITTING", "PUSHING",
+]);
+
 const AGENT_ICON: Record<string, any> = {
   supervisor: Bot, repository_analyst: FileText, planner: FlagTriangleRight,
   design: Wrench, frontend: Wrench, backend: Wrench, integration: Wrench, qa: TestTube2,
@@ -64,8 +71,8 @@ export default function TaskView({ taskId, onTaskChanged }: { taskId: string; on
       try {
         const data = JSON.parse(e.data);
         setEvents((prev) => [...prev, { ...data, kind: e.type }]);
-        if (["state_change", "plan_created", "plan_item_status", "agent_finished", "plan_item_reassigned"]
-          .includes(e.type)) refreshAll();
+        if (["state_change", "plan_created", "plan_item_status", "agent_finished", "plan_item_reassigned",
+          "item_implemented"].includes(e.type)) refreshAll();
       } catch {
         /* ignore malformed event */
       }
@@ -73,6 +80,7 @@ export default function TaskView({ taskId, onTaskChanged }: { taskId: string; on
     const kinds = [
       "task_created", "state_change", "message", "agent_started", "agent_finished", "plan_created",
       "plan_item_status", "supervisor_note", "stop_requested", "tool_call", "plan_item_reassigned",
+      "analysis_complete", "item_implemented",
     ];
     kinds.forEach((k) => es.addEventListener(k, onAny as EventListener));
     // The browser's EventSource reconnects on its own after a drop (network blip, backend
@@ -160,6 +168,8 @@ export default function TaskView({ taskId, onTaskChanged }: { taskId: string; on
     );
   }
 
+  const isRunning = RUNNING_STATES.has(task.status);
+
   return (
     <div className="flex-1 flex min-h-0">
       {/* CENTER */}
@@ -190,10 +200,10 @@ export default function TaskView({ taskId, onTaskChanged }: { taskId: string; on
             </div>
           </div>
           <div className="ml-auto flex items-center gap-1.5">
-            <Button size="sm" variant="secondary" onClick={run}>
-              <Play className="w-3.5 h-3.5" /> Run
+            <Button size="sm" variant="secondary" onClick={run} loading={isRunning} disabled={isRunning}>
+              <Play className="w-3.5 h-3.5" /> {isRunning ? "Running" : "Run"}
             </Button>
-            <Button size="sm" variant="outline" onClick={stop}>
+            <Button size="sm" variant="outline" onClick={stop} disabled={!isRunning}>
               <Square className="w-3.5 h-3.5" /> Stop
             </Button>
             <Button size="sm" variant="outline" onClick={() => setCommitOpen(true)} disabled={task.status !== "READY_FOR_APPROVAL"}>
@@ -252,10 +262,24 @@ export default function TaskView({ taskId, onTaskChanged }: { taskId: string; on
             }
             className="min-h-9"
           />
-          <Button size="icon" onClick={send} disabled={!message.trim()}>
-            <Send className="w-4 h-4" />
+          <Button size="icon" onClick={send} disabled={!message.trim() || isRunning} title={isRunning ? "Agents are working…" : "Send"}>
+            {isRunning ? (
+              <div className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+            ) : (
+              <Send className="w-4 h-4" />
+            )}
           </Button>
         </div>
+        {isRunning && (
+          <div className="px-3 pb-2 -mt-1 flex items-center gap-2 text-[11px] text-white/45 flex-shrink-0">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            Agents are working — you can queue a message, or
+            <button onClick={stop} className="text-amber-300 hover:text-amber-200 underline underline-offset-2">
+              stop
+            </button>
+            . Everything so far is kept.
+          </div>
+        )}
       </div>
 
       {/* RIGHT INSPECTOR */}
@@ -397,15 +421,73 @@ function ActivityRow({ event }: { event: any }) {
   }
   if (kind === "agent_started" || kind === "agent_finished") {
     const Icon = AGENT_ICON[event.payload.role] || Bot;
+    const summary =
+      kind === "agent_finished" && event.payload.summary && event.payload.summary !== "ok"
+        ? event.payload.summary
+        : null;
     return (
-      <div className="flex items-center gap-2 text-[11px] text-white/50 animate-fade-up">
-        <Icon className="w-3.5 h-3.5 flex-shrink-0" />
-        <span className="capitalize">{(event.payload.role || "").replace(/_/g, " ")}</span>
-        <span>{event.payload.action || event.payload.status}</span>
-        {event.payload.model && (
-          <span className="text-white/30 font-mono">
-            · {event.payload.provider}/{event.payload.model}
+      <div className="animate-fade-up">
+        <div className="flex items-center gap-2 text-[11px] text-white/50">
+          <Icon className="w-3.5 h-3.5 flex-shrink-0" />
+          <span className="capitalize">{(event.payload.role || "").replace(/_/g, " ")}</span>
+          <span>{event.payload.action || event.payload.status}</span>
+          {event.payload.model && (
+            <span className="text-white/30 font-mono">
+              · {event.payload.provider}/{event.payload.model}
+            </span>
+          )}
+        </div>
+        {summary && (
+          <div className="ml-5 mt-0.5 text-[11px] text-white/60 leading-relaxed whitespace-pre-wrap">
+            {summary}
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (kind === "analysis_complete") {
+    return (
+      <div className="animate-fade-up text-[11px]">
+        <div className="flex items-center gap-2 text-white/50">
+          <FileText className="w-3.5 h-3.5 flex-shrink-0" /> Repository analysis
+        </div>
+        {event.payload.summary && (
+          <div className="ml-5 mt-0.5 text-white/60 leading-relaxed whitespace-pre-wrap">
+            {event.payload.summary}
+          </div>
+        )}
+        {!!(event.payload.relevant_files || []).length && (
+          <div className="ml-5 mt-0.5 text-white/35 font-mono truncate">
+            {(event.payload.relevant_files || []).join(", ")}
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (kind === "item_implemented") {
+    return (
+      <div className="animate-fade-up text-[11px]">
+        <div className="flex items-center gap-2 text-white/55">
+          <Wrench className="w-3.5 h-3.5 flex-shrink-0" />
+          <span className="capitalize">{(event.payload.role || "").replace(/_/g, " ")}</span>
+          <span className="text-white/75">{event.payload.title}</span>
+          <span className="text-white/30">
+            · {event.payload.op_count} file{event.payload.op_count === 1 ? "" : "s"}
           </span>
+        </div>
+        {event.payload.summary && (
+          <div className="ml-5 mt-0.5 text-white/60 leading-relaxed whitespace-pre-wrap">
+            {event.payload.summary}
+          </div>
+        )}
+        {!!(event.payload.files || []).length && (
+          <div className="ml-5 mt-1 flex flex-wrap gap-1">
+            {(event.payload.files || []).map((f: string) => (
+              <span key={f} className="font-mono text-[10px] text-emerald-300/80 bg-emerald-500/10 rounded px-1.5 py-0.5">
+                {f}
+              </span>
+            ))}
+          </div>
         )}
       </div>
     );
@@ -433,12 +515,24 @@ function ActivityRow({ event }: { event: any }) {
     );
   }
   if (kind === "tool_call") {
+    const args = event.payload.args || {};
+    const argStr = Object.entries(args)
+      .map(([k, v]) => `${k}: ${v}`)
+      .join(", ");
     return (
-      <div className="text-[11px] text-white/40 flex items-center gap-2 animate-fade-up">
-        <Wrench className="w-3.5 h-3.5 flex-shrink-0" />
-        <span className="capitalize">{(event.payload.role || "").replace(/_/g, " ")}</span> called
-        <span className="font-mono text-white/60">{event.payload.tool}</span>
-        {event.payload.server && <span className="text-white/30">via MCP server "{event.payload.server}"</span>}
+      <div className="animate-fade-up">
+        <div className="text-[11px] text-white/40 flex items-center gap-2">
+          <Wrench className="w-3.5 h-3.5 flex-shrink-0" />
+          <span className="capitalize">{(event.payload.role || "").replace(/_/g, " ")}</span> called
+          <span className="font-mono text-white/60">{event.payload.tool}</span>
+          {event.payload.server && <span className="text-white/30">via MCP "{event.payload.server}"</span>}
+        </div>
+        {argStr && <div className="ml-5 text-[11px] text-white/45 truncate">↳ {argStr}</div>}
+        {event.payload.result && (
+          <div className="ml-5 mt-0.5 text-[11px] text-white/55 whitespace-pre-wrap max-h-24 overflow-auto bg-white/[0.03] rounded p-1.5">
+            {event.payload.result}
+          </div>
+        )}
       </div>
     );
   }

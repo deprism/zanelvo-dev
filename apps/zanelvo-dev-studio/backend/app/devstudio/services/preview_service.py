@@ -145,6 +145,21 @@ def attach_external_url(url: str) -> PreviewState:
     return PreviewState(mode="EXTERNAL_URL", status="attached", url=url)
 
 
+# Relative dirs (root first) checked for a self-contained static site — an index.html that can be
+# served and iframed directly, no dev server or build step. This is the preview path that actually
+# works behind this app's reverse proxy (LIVE_LOCAL binds a random localhost port the founder's
+# browser can't reach through the ingress).
+_STATIC_ROOT_CANDIDATES = ["", "public", "dist", "build", "frontend", "site", "www", "src"]
+
+
+def find_static_root(workspace_path: str) -> Optional[str]:
+    for rel in _STATIC_ROOT_CANDIDATES:
+        candidate = os.path.join(workspace_path, rel) if rel else workspace_path
+        if os.path.isfile(os.path.join(candidate, "index.html")):
+            return rel
+    return None
+
+
 def screenshot_only_state(screenshot_path: Optional[str]) -> PreviewState:
     if screenshot_path:
         return PreviewState(mode="SCREENSHOT_ONLY", status="running", url=None, detail=screenshot_path)

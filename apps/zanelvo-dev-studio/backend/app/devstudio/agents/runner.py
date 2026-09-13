@@ -154,7 +154,8 @@ async def call_structured(registry: ModelRegistry, config: AgentConfiguration, t
                                                     kind=kind)
             await provider_health.record(provider_name, "ok")
             parsed = extract_json(result.text)
-            await _finish_run(run_id, task_id, role, "succeeded", "ok", duration_ms)
+            _summary = parsed.get("summary") if isinstance(parsed, dict) else None
+            await _finish_run(run_id, task_id, role, "succeeded", str(_summary or "ok"), duration_ms)
             return parsed
         except ProviderNotConfigured as e:
             classification = "requires_credentials"
@@ -529,6 +530,14 @@ async def call_with_tools(registry: ModelRegistry, config: AgentConfiguration, t
     the same way an unconfigured-credentials one does, never hangs."""
     attempts = _attempts_for(config, registry)
     tools_by_name = {t["name"]: t for t in tools}
+    # A tool-enabled role still owes the orchestrator a single structured JSON answer at the end.
+    # Left to its own devices a model often narrates ("I used web_search and found…") instead of
+    # emitting JSON, so extract_json fails and the whole step errors — exactly what enabling tools
+    # on every role at MAX_QUALITY surfaced on the read-only Analyst. Make the contract explicit.
+    strict_system = system + (
+        "\n\nIMPORTANT: Use tools as needed, but your FINAL message (once you stop calling tools) "
+        "must be ONLY the single valid JSON object/array specified above — no prose, no markdown "
+        "code fences, nothing before or after it.")
 
     last_err: Optional[Exception] = None
     classification = "error"
@@ -543,7 +552,7 @@ async def call_with_tools(registry: ModelRegistry, config: AgentConfiguration, t
             result: Optional[LLMResult] = None
             for _ in range(max_iterations):
                 result = await provider.generate_with_tools(
-                    system=system, model=model, tools=tools, prompt=cur_prompt,
+                    system=strict_system, model=model, tools=tools, prompt=cur_prompt,
                     history=history, tool_results=tool_results, max_tokens=max_tokens)
                 await usage_tracker.record_invocation(task_id, role, result, agent_run_id=run_id,
                                                         kind="generate_structured")
@@ -553,21 +562,48 @@ async def call_with_tools(registry: ModelRegistry, config: AgentConfiguration, t
                 history = result.tool_loop_history
                 executed = []
                 for call in result.tool_calls:
-                    executed.append(await _execute_tool_call(call, tools_by_name, task_id=task_id, role=role,
-                                                                registry=registry, config=config))
+                    call_result = await _execute_tool_call(call, tools_by_name, task_id=task_id, role=role,
+                                                              registry=registry, config=config)
+                    executed.append(call_result)
+                    args = call.get("arguments") or {}
                     await activity_service.emit(task_id, "tool_call", {
                         "role": role, "tool": call["name"],
                         "server": (tools_by_name.get(call["name"]) or {}).get("_mcp_server"),
+                        "args": {k: str(v)[:200] for k, v in args.items()} if isinstance(args, dict) else {},
+                        "result": (str(call_result.get("content") or ""))[:600],
                     })
                 tool_results = executed
             else:
-                raise AgentStepFailed(
-                    f"{role} step '{action}' hit the {max_iterations}-call tool loop limit "
-                    "without a final answer", classification="error")
+                # Hit the tool-call budget without the model volunteering a final answer. Rather
+                # than fail the whole step, force a closing no-tool structured call so it still
+                # produces the required JSON instead of looping forever (this is what left QA/
+                # testing items — which love to keep calling screenshot/execute_bash — stuck).
+                result = await provider.generate_structured(
+                    system=strict_system,
+                    prompt=("You have used enough tools. Now output ONLY the required JSON "
+                            "object/array specified above, based on what you have gathered so far."),
+                    model=model, max_tokens=max_tokens)
+                await usage_tracker.record_invocation(task_id, role, result, agent_run_id=run_id,
+                                                        kind="generate_structured")
             duration_ms = int((time.monotonic() - t0) * 1000)
             await provider_health.record(provider_name, "ok")
-            parsed = extract_json(result.text) if result is not None else {}
-            await _finish_run(run_id, task_id, role, "succeeded", "ok", duration_ms)
+            try:
+                parsed = extract_json(result.text) if result is not None else {}
+            except AgentStepFailed:
+                # Tool-capable models sometimes end the loop with prose instead of the required
+                # JSON. Rather than fail the whole step, recover with one plain (no-tool) structured
+                # call that reformats their own final answer into the JSON contract.
+                recovery = await provider.generate_structured(
+                    system=strict_system,
+                    prompt=("Your previous answer was not valid JSON. Reply with ONLY the required "
+                            "JSON object/array specified above and nothing else. Previous answer:\n\n"
+                            + ((result.text if result is not None else "") or "")),
+                    model=model, max_tokens=max_tokens)
+                await usage_tracker.record_invocation(task_id, role, recovery, agent_run_id=run_id,
+                                                        kind="generate_structured")
+                parsed = extract_json(recovery.text)
+            _summary = parsed.get("summary") if isinstance(parsed, dict) else None
+            await _finish_run(run_id, task_id, role, "succeeded", str(_summary or "ok"), duration_ms)
             return parsed
         except ProviderNotConfigured as e:
             classification = "requires_credentials"

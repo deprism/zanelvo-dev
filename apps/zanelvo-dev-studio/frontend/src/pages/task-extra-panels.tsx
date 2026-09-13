@@ -93,6 +93,23 @@ export function PreviewPanel({ taskId }: { taskId: string }) {
   const [state, setState] = useState<any>(null);
   const [externalUrl, setExternalUrl] = useState("");
   const [busy, setBusy] = useState(false);
+  const [staticInfo, setStaticInfo] = useState<any>(null);
+  const [iframeKey, setIframeKey] = useState(0);
+
+  async function checkStatic() {
+    try {
+      const { data } = await devstudio.previewStaticInfo(taskId);
+      setStaticInfo(data);
+    } catch {
+      setStaticInfo({ available: false });
+    }
+  }
+  useEffect(() => {
+    checkStatic();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskId]);
+
+  const serveUrl = devstudio.previewServeUrl(taskId);
 
   async function startLive() {
     setBusy(true);
@@ -106,25 +123,57 @@ export function PreviewPanel({ taskId }: { taskId: string }) {
       setBusy(false);
     }
   }
-
   async function stopLive() {
     await devstudio.previewStop(taskId);
     setState(null);
   }
-
   async function attachExternal() {
     if (!externalUrl.trim()) return;
     const { data } = await devstudio.previewExternal(taskId, externalUrl.trim());
     setState(data);
   }
-
   async function loadScreenshotMode() {
     const { data } = await devstudio.previewScreenshot(taskId);
     setState(data);
   }
 
+  if (staticInfo?.available) {
+    return (
+      <div className="h-full flex flex-col min-h-0">
+        <div className="flex items-center gap-1.5 p-2 border-b border-white/10 flex-shrink-0">
+          <Badge tone="success" dot>live</Badge>
+          <span className="text-[11px] text-white/45 truncate">static site preview</span>
+          <div className="ml-auto flex gap-1.5">
+            <Button size="sm" variant="outline" onClick={() => { checkStatic(); setIframeKey((k) => k + 1); }}>
+              <RotateCcw className="w-3 h-3" /> Refresh
+            </Button>
+            <a href={serveUrl} target="_blank" rel="noreferrer">
+              <Button size="sm" variant="outline"><Link2 className="w-3 h-3" /> Open</Button>
+            </a>
+          </div>
+        </div>
+        <iframe
+          key={iframeKey}
+          src={serveUrl}
+          title="Live preview"
+          className="flex-1 w-full bg-white"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock"
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="h-full overflow-y-auto p-3 space-y-3">
+      <EmptyState
+        compact
+        icon={MonitorPlay}
+        title="No live preview yet"
+        description="As soon as the agents create an index.html, an interactive preview appears here automatically. For a full dev server or an external URL, use the options below."
+      />
+      <Button size="sm" variant="outline" onClick={checkStatic}>
+        <RotateCcw className="w-3.5 h-3.5" /> Check for site
+      </Button>
       <div className="flex gap-1.5">
         <Button size="sm" variant="outline" loading={busy} onClick={startLive}>
           <Play className="w-3.5 h-3.5" /> Live local
@@ -159,7 +208,6 @@ export function PreviewPanel({ taskId }: { taskId: string }) {
           {state.detail && <div className="text-white/50">{state.detail}</div>}
         </div>
       )}
-      {!state && <EmptyState compact icon={MonitorPlay} title="No preview started yet" />}
     </div>
   );
 }

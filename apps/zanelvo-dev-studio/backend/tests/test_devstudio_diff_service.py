@@ -69,3 +69,35 @@ def test_to_dict_shape():
     assert d["total_additions"] == 4
     assert d["total_deletions"] == 2
     assert isinstance(d["files"], list)
+
+
+# --- untracked (newly-created) files must appear in the diff -----------------------------------
+
+def test_get_diff_summary_includes_untracked_new_files(tmp_path):
+    """A from-scratch website is all NEW files; plain `git diff` ignores untracked files, so the
+    summary used to come back empty (0 changes) even though the agents wrote real code. Regression:
+    get_diff_summary now marks intent-to-add first, so new files are counted as additions."""
+    import asyncio
+    import subprocess
+
+    from app.devstudio.services.diff_service import get_diff_summary
+
+    repo = str(tmp_path)
+    run = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True,
+                                     capture_output=True)  # noqa: E731
+    run("init", "-q")
+    run("config", "user.email", "t@t.t")
+    run("config", "user.name", "t")
+    (tmp_path / "README.md").write_text("base\n")
+    run("add", "-A")
+    run("commit", "-qm", "base")
+    base = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"]).decode().strip()
+
+    # Create brand-new, untracked files (the whole-new-site case).
+    (tmp_path / "index.html").write_text("<h1>hi</h1>\n")
+    (tmp_path / "game.js").write_text("console.log('play')\n")
+
+    summary = asyncio.run(get_diff_summary(repo, base)).to_dict()
+    assert summary["changed_file_count"] == 2
+    assert {f["path"] for f in summary["files"]} == {"index.html", "game.js"}
+    assert summary["total_additions"] >= 2

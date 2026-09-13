@@ -90,6 +90,8 @@ export const devstudio = {
   previewStop: (id: string) => api.post(`${base}/tasks/${id}/preview/stop`),
   previewExternal: (id: string, url: string) => api.post(`${base}/tasks/${id}/preview/external`, { url }),
   previewScreenshot: (id: string) => api.get(`${base}/tasks/${id}/preview/screenshot`),
+  previewStaticInfo: (id: string) => api.get(`${base}/tasks/${id}/preview/static-info`),
+  previewServeUrl: (id: string) => `${API_ORIGIN}/api${base}/tasks/${id}/preview/serve/`,
 
   eventsUrl: (id: string) => `${API_ORIGIN}/api${base}/tasks/${id}/events`,
 };

@@ -114,6 +114,24 @@ def test_select_runnable_items_does_not_chain_unlock_within_one_pass():
     assert [i.id for i in runnable] == ["1"]
 
 
+def test_dependency_chain_fully_resolves_across_passes():
+    # A <- B <- C <- D (a strict chain). The orchestrator's implement loop now runs pass after
+    # pass: each pass selects the currently-runnable items and marks them implemented, so a chain
+    # this deep fully resolves (in dependency order) instead of only its first layer — the exact
+    # bug that sent 8-item plans to review with 7 items still PENDING and an empty diff.
+    items = [_item("1", "A"), _item("2", "B", depends_on=["A"]),
+             _item("3", "C", depends_on=["B"]), _item("4", "D", depends_on=["C"])]
+    order = []
+    for _ in range(20):  # generous cap; must terminate well before this
+        runnable = _select_runnable_items(items)
+        if not runnable:
+            break
+        for it in runnable:
+            it.status = "IMPLEMENTED"
+            order.append(it.id)
+    assert order == ["1", "2", "3", "4"]
+
+
 # --- _escalate_strategy guard clauses (no DB touch on these paths) -----------------------------
 
 def test_escalate_strategy_noop_when_already_on_troubleshoot():
