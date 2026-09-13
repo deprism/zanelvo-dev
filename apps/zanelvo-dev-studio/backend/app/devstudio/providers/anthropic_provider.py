@@ -48,6 +48,47 @@ def _sdk():
         ) from e
 
 
+_CACHE_CONTROL = {"type": "ephemeral"}
+
+
+def _cached_system(system: str) -> List[Dict[str, Any]]:
+    """Every call marks its system prompt as a cache breakpoint. Anthropic silently skips caching
+    a block below its per-model minimum (1024/2048 tokens) rather than erroring, so this is a safe
+    no-op for a short role prompt and a real saving for a long one (a founder's custom system
+    prompt, or the implementer JSON contract appended in generate_structured) — never something
+    that has to be sized correctly by hand."""
+    return [{"type": "text", "text": system, "cache_control": dict(_CACHE_CONTROL)}]
+
+
+def _strip_cache_control(messages: List[Dict[str, Any]]) -> None:
+    """Removes any cache_control left over from a previous turn's marking (see
+    _mark_last_message_cacheable) before re-marking a new one — keeps exactly one active
+    breakpoint in the message history at a time so a long tool-calling loop never exceeds
+    Anthropic's 4-breakpoints-per-request cap (system + tools + this = 3, always)."""
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    block.pop("cache_control", None)
+
+
+def _mark_last_message_cacheable(messages: List[Dict[str, Any]]) -> None:
+    """Marks the last message's last content block as a cache breakpoint, so everything up to and
+    including it is a cache HIT on the next tool-loop iteration (runner.py's call_with_tools calls
+    generate_with_tools again with this exact history plus new content appended) — only the newly
+    appended tail is billed as fresh input. This is where the real token savings are: the tool loop
+    resends its FULL growing history (system + tools + every prior tool_use/tool_result) on every
+    one of its up-to-6 iterations, uncached."""
+    if not messages:
+        return
+    content = messages[-1]["content"]
+    if isinstance(content, str):
+        messages[-1]["content"] = [{"type": "text", "text": content, "cache_control": dict(_CACHE_CONTROL)}]
+    elif isinstance(content, list) and content:
+        content[-1] = {**content[-1], "cache_control": dict(_CACHE_CONTROL)}
+
+
 class AnthropicProvider(LLMProvider):
     name = "anthropic"
 
@@ -84,7 +125,7 @@ class AnthropicProvider(LLMProvider):
         t0 = time.monotonic()
         kwargs: Dict[str, Any] = dict(
             model=model, max_tokens=max_tokens, temperature=temperature,
-            system=system, messages=[{"role": "user", "content": prompt}],
+            system=_cached_system(system), messages=[{"role": "user", "content": prompt}],
         )
         if reasoning_level and self.supports_reasoning_levels(model):
             budget = {"low": 1024, "medium": 4096, "high": 12000}.get(reasoning_level, 4096)
@@ -121,7 +162,7 @@ class AnthropicProvider(LLMProvider):
                 "source": {"type": "base64", "media_type": "image/png", "data": img},
             })
         resp = await client.messages.create(
-            model=model, max_tokens=max_tokens, system=system,
+            model=model, max_tokens=max_tokens, system=_cached_system(system),
             messages=[{"role": "user", "content": content}],
         )
         text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
@@ -133,7 +174,7 @@ class AnthropicProvider(LLMProvider):
                       max_tokens: int = 4096) -> AsyncIterator[str]:
         client = self._client()
         async with client.messages.stream(
-            model=model, max_tokens=max_tokens, system=system,
+            model=model, max_tokens=max_tokens, system=_cached_system(system),
             messages=[{"role": "user", "content": prompt}],
         ) as stream:
             async for text in stream.text_stream:
@@ -168,9 +209,17 @@ class AnthropicProvider(LLMProvider):
             else {"name": t["name"], "description": t.get("description", ""), "input_schema": t["inputSchema"]}
             for t in tools
         ]
+        # cache_control on the LAST tool definition caches the whole tools array (per Anthropic's
+        # own semantics) — real savings across this call's own up-to-6-iteration loop, since the
+        # full tool schema is resent unchanged on every one of them.
+        if anthropic_tools:
+            anthropic_tools[-1] = {**anthropic_tools[-1], "cache_control": dict(_CACHE_CONTROL)}
+        _strip_cache_control(messages)
+        _mark_last_message_cacheable(messages)
         t0 = time.monotonic()
         resp = await client.messages.create(
-            model=model, max_tokens=max_tokens, system=system, messages=messages, tools=anthropic_tools,
+            model=model, max_tokens=max_tokens, system=_cached_system(system), messages=messages,
+            tools=anthropic_tools,
         )
         dur = int((time.monotonic() - t0) * 1000)
         messages.append({"role": "assistant", "content": [b.model_dump() for b in resp.content]})
