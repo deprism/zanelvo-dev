@@ -9,10 +9,10 @@
 #   1. Only need Emergent, not the native OpenAI provider? Install this file instead of (not in
 #      addition to) requirements-devstudio.txt's openai line.
 #   2. Need both? Install requirements-devstudio.txt first, then this file — pip will downgrade
-#      openai to 1.99.9 to satisfy emergentintegrations. The native OpenAIProvider (Chat
-#      Completions API) has not been specifically re-verified against 1.99.9 in this repo; if you
-#      hit an OpenAI-provider issue after installing this file, that downgrade is the first thing
-#      to check.
+#      openai to 1.99.9 to satisfy emergentintegrations. Verified safe: every kwarg openai_provider.py
+#      passes to chat.completions.create (max_completion_tokens, reasoning_effort, response_format,
+#      stream, ...) exists in openai==1.99.9's own method signature (checked directly against the
+#      installed package, not assumed) — the native OpenAIProvider keeps working after this downgrade.
 #   3. Cleanest for a production deployment that wants both without any shared-pin risk: run two
 #      separate virtualenvs/containers, or drop the native OpenAIProvider from your Agents config
 #      and rely on Emergent's own OpenAI-family models instead.
