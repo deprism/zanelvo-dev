@@ -56,7 +56,7 @@ def _status_for(exc: Exception) -> int:
     from app.devstudio.services.execution_service import CommandBlocked
     from app.devstudio.services.file_service import PathEscapeError, StalePatchError
     from app.devstudio.services.git_service import GitError
-    from app.devstudio.services.github_provider import GitHubError
+    from app.devstudio.services.github_provider import GitHubError, GitHubNotConfigured
     from app.devstudio.services.upload_service import UploadRejected
     from app.devstudio.state_machine import InvalidTransition
 
@@ -72,7 +72,7 @@ def _status_for(exc: Exception) -> int:
         return 400
     if isinstance(exc, (CommandBlocked, UploadRejected)):
         return 400
-    if isinstance(exc, (ProviderNotConfigured, ProviderNotImplemented)):
+    if isinstance(exc, (ProviderNotConfigured, ProviderNotImplemented, GitHubNotConfigured)):
         return 424  # Failed Dependency — a configuration gap, not a server bug
     if isinstance(exc, ProviderError):
         return 502  # a normalized upstream provider failure (rate limit, timeout, etc.)

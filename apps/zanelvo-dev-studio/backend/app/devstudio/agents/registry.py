@@ -56,20 +56,26 @@ def _default_config(role: AgentRole, preset: str = "BALANCED") -> AgentConfigura
 
 
 async def ensure_defaults(preset: str = "BALANCED") -> None:
+    # Same fix as custom_agent_service.ensure_seed_roles (and same real bug, reproduced live):
+    # find_one-then-insert_one races under concurrent requests against ds_agent_configs' unique
+    # index on `role` — two calls can both see "missing" and both insert, and the loser gets an
+    # unhandled DuplicateKeyError. $setOnInsert via upsert is atomic, so a duplicate is a no-op.
     db = get_db()
     for role in await _all_roles():
-        existing = await db.ds_agent_configs.find_one({"role": role})
-        if not existing:
-            await db.ds_agent_configs.insert_one(_default_config(role, preset).to_mongo())
+        await db.ds_agent_configs.update_one(
+            {"role": role}, {"$setOnInsert": _default_config(role, preset).to_mongo()}, upsert=True)
 
 
 async def get_config(role: AgentRole) -> AgentConfiguration:
-    doc = await get_db().ds_agent_configs.find_one({"role": role})
+    db = get_db()
+    doc = await db.ds_agent_configs.find_one({"role": role})
     if not doc:
         cfg = _default_config(role)
-        res = await get_db().ds_agent_configs.insert_one(cfg.to_mongo())
-        cfg.id = str(res.inserted_id)
-        return cfg
+        await db.ds_agent_configs.update_one(
+            {"role": role}, {"$setOnInsert": cfg.to_mongo()}, upsert=True)
+        # Re-fetch regardless of whether this call or a concurrent one actually won the insert —
+        # correct either way, and gives the real _id instead of assuming this call created it.
+        doc = await db.ds_agent_configs.find_one({"role": role})
     return AgentConfiguration.from_mongo(doc)
 
 

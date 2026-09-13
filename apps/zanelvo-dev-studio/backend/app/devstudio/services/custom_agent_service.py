@@ -80,10 +80,15 @@ SEED_ROLES: List[Dict[str, Any]] = [
 async def ensure_seed_roles() -> None:
     db = get_db()
     for spec in SEED_ROLES:
-        existing = await db.ds_custom_agent_roles.find_one({"role": spec["role"]})
-        if not existing:
-            cfg = CustomAgentRoleConfig(category="implementer", built_in=True, **spec)
-            await db.ds_custom_agent_roles.insert_one(cfg.to_mongo())
+        # Reproduced live: list_roles() runs this on every call, and the frontend's first page
+        # load after a fresh DB fires several role-dependent requests concurrently — two calls
+        # racing past a find_one-then-insert_one check both see "not seeded yet" and both insert,
+        # and the second hits ds_custom_agent_roles' unique index on `role` with an unhandled
+        # DuplicateKeyError (a real 500 on first login). An upsert with $setOnInsert is atomic at
+        # the document level, so a duplicate simply does nothing instead of raising.
+        cfg = CustomAgentRoleConfig(category="implementer", built_in=True, **spec)
+        await db.ds_custom_agent_roles.update_one(
+            {"role": spec["role"]}, {"$setOnInsert": cfg.to_mongo()}, upsert=True)
 
 
 async def list_roles() -> List[CustomAgentRoleConfig]:
