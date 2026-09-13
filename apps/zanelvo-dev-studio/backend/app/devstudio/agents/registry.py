@@ -96,8 +96,29 @@ async def update_config(role: AgentRole, **fields) -> AgentConfiguration:
 
 
 async def apply_preset(preset: str) -> Dict[str, AgentConfiguration]:
+    extra = preset_extra_fields(preset)
     for role in await _all_roles():
         p = preset_for_role(preset, role)
         await update_config(role, primary_provider=p["primary_provider"], primary_model=p["primary_model"],
-                             fallback_provider=p["fallback_provider"], fallback_model=p["fallback_model"])
+                             fallback_provider=p["fallback_provider"], fallback_model=p["fallback_model"],
+                             **extra)
     return await list_configs()
+
+
+def preset_extra_fields(preset: str) -> Dict[str, object]:
+    """Non-model per-role overrides a preset applies on top of provider/model selection.
+
+    MAX_QUALITY turns every agent all the way up: every built-in tool enabled and reasoning_level
+    "high", so the most-expensive tier also gives each role its fullest capability (tool use +
+    maximum reasoning), not just its strongest model. The other presets leave tools_enabled and
+    reasoning_level untouched (the conservative per-role defaults from _DEFAULT_TOOLS_BY_ROLE set
+    at seed time still apply) — returned as an empty dict here.
+
+    Note: design/reviewer keep their Gemini/OpenAI primary at MAX_QUALITY; those SDKs don't
+    implement the tool-calling loop, so their tool calls resolve on the Anthropic fallback (or,
+    under auto_provider, on Emergent) — a deliberate, documented tradeoff of "all agents, all
+    tools", not a silent failure."""
+    if preset == "MAX_QUALITY":
+        from .runner import BUILTIN_TOOLS
+        return {"tools_enabled": list(BUILTIN_TOOLS.keys()), "reasoning_level": "high"}
+    return {}

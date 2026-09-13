@@ -52,6 +52,24 @@ def test_default_tools_are_all_real_builtin_tool_names():
             assert name in BUILTIN_TOOLS, f"{name!r} is not a real built-in tool"
 
 
+# --- preset_extra_fields (MAX_QUALITY = all tools + high reasoning) ---------------------------
+
+def test_max_quality_preset_enables_all_tools_and_high_reasoning():
+    from app.devstudio.agents.registry import preset_extra_fields
+    from app.devstudio.agents.runner import BUILTIN_TOOLS
+
+    extra = preset_extra_fields("MAX_QUALITY")
+    assert extra["reasoning_level"] == "high"
+    # Every real built-in tool, no more and no less.
+    assert set(extra["tools_enabled"]) == set(BUILTIN_TOOLS.keys())
+
+
+def test_other_presets_do_not_override_tools_or_reasoning():
+    from app.devstudio.agents.registry import preset_extra_fields
+    assert preset_extra_fields("BALANCED") == {}
+    assert preset_extra_fields("ECONOMICAL") == {}
+
+
 # --- _select_runnable_items (pure dependency-readiness selector) ------------------------------
 
 def test_select_runnable_items_skips_terminal_statuses():

@@ -34,6 +34,12 @@ commit→push flow end-to-end against a real repo, and harden what's broken.
   commit + push (branch `ai/add-getting-started-to-readme-4479b2`, commit `3cbe2e0`), confirmed
   via the GitHub API; 3-pane UI + TaskView activity timeline confirmed in a real browser.
 
+## Feature changes (with tests)
+- MAX_QUALITY preset now also turns every agent all the way up: all 12 built-in tools enabled +
+  reasoning_level "high" on every role (was: model selection only). Pure `preset_extra_fields()`
+  helper in `agents/registry.py` (DB-free tested); `apply_preset` applies it. Other presets leave
+  tools/reasoning untouched. Verified live: all 16 roles → 12 tools + high after applying it.
+
 ## Fixes / hardening (with tests)
 1. `tests/test_devstudio_emergent_provider.py`: made the missing-SDK test deterministic (forces
    the ImportError path via monkeypatch) so it passes whether or not `emergentintegrations` is
