@@ -39,3 +39,6 @@ venv/
 
 # App-specific runtime data
 apps/zanelvo-dev-studio/backend/var/
+*.env
+credentials.json
+.credentials
